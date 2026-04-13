@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.sqlite3
+
+# Локальная сборка ffmpeg (gyan essentials), не коммитить бинарники
+ffmpeg-runtime/
+ffmpeg-essentials/
+_ffmpeg*.zip
+_ffmpeg_sdk_headers_only_backup/
