@@ -88,8 +88,11 @@ class App(ctk.CTk):
             mm = MediaScanMode.PHOTOS_ONLY.value
         self._media_mode_var = ctk.StringVar(value=mm)
         self._sort_workers_var = ctk.StringVar(value=str(saved.get("sort_workers", 3) or 3))
-        _saved_free = bool(saved.get("free_tag_mode", False))
-        self._tag_mode_var = ctk.StringVar(value="free" if _saved_free else "strict")
+        _saved_mode = str(saved.get("tag_mode", "") or "").strip()
+        if _saved_mode not in {"strict", "free", "auto"}:
+            _saved_free = bool(saved.get("free_tag_mode", False))
+            _saved_mode = "free" if _saved_free else "strict"
+        self._tag_mode_var = ctk.StringVar(value=_saved_mode)
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))
 
         self._build()
@@ -178,6 +181,7 @@ class App(ctk.CTk):
         row_tag_mode.pack(fill="x", padx=8, pady=(0, 4))
         for val, label_key in (
             ("strict", "folders.tag_mode.strict_radio"),
+            ("auto", "folders.tag_mode.auto_radio"),
             ("free", "folders.tag_mode.free_radio"),
         ):
             ctk.CTkRadioButton(
@@ -323,8 +327,11 @@ class App(ctk.CTk):
         self._dup_pane.pack(fill="both", expand=True, padx=4, pady=4)
 
     def _update_tag_mode_hint(self) -> None:
-        if self._tag_mode_var.get() == "free":
+        mode = self._tag_mode_var.get()
+        if mode == "free":
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_free"))
+        elif mode == "auto":
+            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_auto"))
         else:
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_strict"))
 
@@ -476,6 +483,7 @@ class App(ctk.CTk):
                     "model_manual": self._model_manual_var.get().strip(),
                     "media_mode": self._media_mode_var.get().strip(),
                     "sort_workers": self._sort_workers_var.get().strip(),
+                    "tag_mode": self._tag_mode_var.get(),
                     "free_tag_mode": self._tag_mode_var.get() == "free",
                     "prompt_extra": self._prompt_extra_var.get().strip(),
                     "user_context": self._context.get("1.0", "end").strip(),
@@ -671,18 +679,28 @@ class App(ctk.CTk):
             MediaScanMode.VIDEO_ONLY: "только видео",
         }
         self._append_log(f"--- Старт (режим: {mode_labels.get(media_mode, media_mode.value)}) ---")
-        if self._tag_mode_var.get() == "strict":
+        tag_mode = self._tag_mode_var.get()
+        if tag_mode == "strict":
             self._append_log(t("sort.log_mode_strict"))
+        elif tag_mode == "auto":
+            self._append_log(t("sort.log_mode_auto"))
         else:
             self._append_log(t("sort.log_mode_free"))
             self._append_log(t("sort.warn_large_library_free"))
         self._save_gui_settings()
 
         workers = max(1, min(4, int(self._sort_workers_var.get().strip() or "3")))
-        self._worker = SortWorker(self._db, self._msg_queue, api_base=api_base, model=model, workers=workers)
+        self._worker = SortWorker(
+            self._db,
+            self._msg_queue,
+            api_base=api_base,
+            model=model,
+            workers=workers,
+            free_tag_mode=tag_mode == "free",
+            auto_tag_mode=tag_mode == "auto",
+        )
         prompt_extra = self._prompt_extra_var.get().strip()
         self._worker.prompt_extra = prompt_extra
-        self._worker.free_tag_mode = self._tag_mode_var.get() == "free"
         self._worker.reset_stop()
         self._worker.set_paused(False)
 
@@ -720,7 +738,7 @@ class App(ctk.CTk):
             self._total_files = int(msg.get("total", 0))
             self._prog_label.configure(text=f"{self._done_files} / {self._total_files}")
             self._eta_label.configure(text="Осталось: —")
-            if self._total_files >= 50_000 and self._tag_mode_var.get() == "free":
+            if self._total_files >= 50_000 and self._tag_mode_var.get() != "strict":
                 self._append_log(t("sort.warn_many_files_free", n=self._total_files))
         elif msg_type == "current":
             p = msg.get("path", "")

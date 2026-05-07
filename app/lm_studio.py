@@ -56,9 +56,21 @@ def _auth_headers_get(api_key: str | None) -> dict[str, str]:
         return {}
     return {"Authorization": f"Bearer {key}"}
 
-def build_classification_system_prompt(user_context: str, *, free_mode: bool = False, prompt_extra: str = "") -> str:
+def build_classification_system_prompt(
+    user_context: str,
+    *,
+    free_mode: bool = False,
+    auto_mode: bool = False,
+    prompt_extra: str = "",
+) -> str:
     """Системный текст: базовые правила + приоритеты + определения по тегам + USER_CONTEXT."""
-    if free_mode:
+    if auto_mode:
+        header = (
+            "You are a local backend automated tagging script. First prefer known tags below. "
+            "If none fit, propose short lowercase extra tags. Output one line with candidate tags separated by commas "
+            "(most probable first). Example: nature/forest/sunset, evening/sky."
+        )
+    elif free_mode:
         header = (
             "You are a local backend automated tagging script. Output one lowercase hierarchical tag "
             "(slash-separated, for example nature/forest/sunset). "
@@ -205,10 +217,16 @@ def build_messages(
     user_context: str,
     *,
     free_mode: bool = False,
+    auto_mode: bool = False,
     prompt_extra: str = "",
 ) -> list[dict[str, Any]]:
     """System + user with vision image_url (OpenAI-compatible)."""
-    system_text = build_classification_system_prompt(user_context, free_mode=free_mode, prompt_extra=prompt_extra)
+    system_text = build_classification_system_prompt(
+        user_context,
+        free_mode=free_mode,
+        auto_mode=auto_mode,
+        prompt_extra=prompt_extra,
+    )
     return [
         {"role": "system", "content": system_text},
         {
@@ -218,7 +236,8 @@ def build_messages(
                     "type": "text",
                     "text": (
                         "Classify this image. Output exactly one final tag only, no explanation. "
-                        "In free mode this may be a hierarchical slash-separated tag."
+                        "In free mode this may be a hierarchical slash-separated tag. "
+                        "In auto mode output comma-separated candidates with the best first."
                     ),
                 },
                 {"type": "image_url", "image_url": {"url": image_data_uri}},
@@ -232,17 +251,24 @@ def build_messages_multi(
     user_context: str,
     *,
     free_mode: bool = False,
+    auto_mode: bool = False,
     prompt_extra: str = "",
 ) -> list[dict[str, Any]]:
     """Several frames from one video/GIF — один тег на весь контент."""
-    system_text = build_classification_system_prompt(user_context, free_mode=free_mode, prompt_extra=prompt_extra)
+    system_text = build_classification_system_prompt(
+        user_context,
+        free_mode=free_mode,
+        auto_mode=auto_mode,
+        prompt_extra=prompt_extra,
+    )
     user_parts: list[dict[str, Any]] = [
         {
             "type": "text",
             "text": (
                 "These images are frames from the same video file in chronological order. "
                 "Classify the entire content with exactly one final tag only, no explanation. "
-                "In free mode this may be a hierarchical slash-separated tag."
+                "In free mode this may be a hierarchical slash-separated tag. "
+                "In auto mode output comma-separated candidates with the best first."
             ),
         },
     ]
@@ -263,13 +289,20 @@ def _chat_completion_once(
     api_key: str | None,
     timeout: tuple[float, float] | float,
     free_mode: bool,
+    auto_mode: bool,
     prompt_extra: str,
 ) -> str:
     base = api_base.rstrip("/")
     url = f"{base}{CHAT_COMPLETIONS_PATH}"
     payload = {
         "model": model,
-        "messages": build_messages(image_data_uri, user_context, free_mode=free_mode, prompt_extra=prompt_extra),
+        "messages": build_messages(
+            image_data_uri,
+            user_context,
+            free_mode=free_mode,
+            auto_mode=auto_mode,
+            prompt_extra=prompt_extra,
+        ),
         "temperature": 0.2,
         "max_tokens": CHAT_COMPLETION_MAX_TOKENS,
     }
@@ -303,6 +336,7 @@ def _chat_completion_multi_once(
     api_key: str | None,
     timeout: tuple[float, float] | float,
     free_mode: bool,
+    auto_mode: bool,
     prompt_extra: str,
 ) -> str:
     if not image_data_uris:
@@ -312,7 +346,11 @@ def _chat_completion_multi_once(
     payload = {
         "model": model,
         "messages": build_messages_multi(
-            image_data_uris, user_context, free_mode=free_mode, prompt_extra=prompt_extra
+            image_data_uris,
+            user_context,
+            free_mode=free_mode,
+            auto_mode=auto_mode,
+            prompt_extra=prompt_extra,
         ),
         "temperature": 0.2,
         "max_tokens": CHAT_COMPLETION_MAX_TOKENS,
@@ -348,6 +386,7 @@ def chat_completion_multi(
     timeout: tuple[float, float] | None = None,
     on_retry: Callable[[str], None] | None = None,
     free_mode: bool = False,
+    auto_mode: bool = False,
     prompt_extra: str = "",
 ) -> str:
     """Multi-image POST с теми же ретраями, что и chat_completion."""
@@ -361,6 +400,7 @@ def chat_completion_multi(
             api_key=api_key,
             timeout=t,
             free_mode=free_mode,
+            auto_mode=auto_mode,
             prompt_extra=prompt_extra,
         ),
         on_retry=on_retry,
@@ -379,13 +419,14 @@ def classify_frames(
     on_retry: Callable[[str], None] | None = None,
     on_log: Callable[[str], None] | None = None,
     free_mode: bool = False,
+    auto_mode: bool = False,
     prompt_extra: str = "",
 ) -> str:
     """
     Классификация по кадрам: multi-image → сужение до 1 кадра → покадровые запросы + merge по приоритету.
     Возвращает нормализованный тег (строка whitelist).
     """
-    from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_free
+    from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_auto, normalize_tag_free
 
     def log(msg: str) -> None:
         if on_log:
@@ -407,9 +448,14 @@ def classify_frames(
                 timeout=t,
                 on_retry=on_retry,
                 free_mode=free_mode,
+                auto_mode=auto_mode,
                 prompt_extra=prompt_extra,
             )
-            return normalize_tag_free(raw) if free_mode else normalize_tag(raw)
+            if auto_mode:
+                return normalize_tag_auto(raw)
+            if free_mode:
+                return normalize_tag_free(raw)
+            return normalize_tag(raw)
         except Exception as e:
             log(f"rollback: single frame: {e!s}")
             return UNCATEGORIZED
@@ -438,9 +484,14 @@ def classify_frames(
                     timeout=t,
                     on_retry=on_retry,
                     free_mode=free_mode,
+                    auto_mode=auto_mode,
                     prompt_extra=prompt_extra,
                 )
-                return normalize_tag_free(raw) if free_mode else normalize_tag(raw)
+                if auto_mode:
+                    return normalize_tag_auto(raw)
+                if free_mode:
+                    return normalize_tag_free(raw)
+                return normalize_tag(raw)
             except Exception as e:
                 log(f"rollback: multi n={len(subset)}: {e!s}")
         else:
@@ -454,9 +505,14 @@ def classify_frames(
                     timeout=t,
                     on_retry=on_retry,
                     free_mode=free_mode,
+                    auto_mode=auto_mode,
                     prompt_extra=prompt_extra,
                 )
-                return normalize_tag_free(raw) if free_mode else normalize_tag(raw)
+                if auto_mode:
+                    return normalize_tag_auto(raw)
+                if free_mode:
+                    return normalize_tag_free(raw)
+                return normalize_tag(raw)
             except Exception as e:
                 log(f"rollback: single after multi fail: {e!s}")
 
@@ -472,14 +528,20 @@ def classify_frames(
                 timeout=t,
                 on_retry=on_retry,
                 free_mode=free_mode,
+                auto_mode=auto_mode,
                 prompt_extra=prompt_extra,
             )
-            tags.append(normalize_tag_free(raw) if free_mode else normalize_tag(raw))
+            if auto_mode:
+                tags.append(normalize_tag_auto(raw))
+            elif free_mode:
+                tags.append(normalize_tag_free(raw))
+            else:
+                tags.append(normalize_tag(raw))
         except Exception as e:
             log(f"rollback: per-frame {i}: {e!s}")
     if not tags:
         return UNCATEGORIZED
-    if free_mode:
+    if free_mode or auto_mode:
         counts: dict[str, int] = {}
         for tag in tags:
             counts[tag] = counts.get(tag, 0) + 1
@@ -498,6 +560,7 @@ def chat_completion(
     timeout: tuple[float, float] | None = None,
     on_retry: Callable[[str], None] | None = None,
     free_mode: bool = False,
+    auto_mode: bool = False,
     prompt_extra: str = "",
 ) -> str:
     """
@@ -514,6 +577,7 @@ def chat_completion(
             api_key=api_key,
             timeout=t,
             free_mode=free_mode,
+            auto_mode=auto_mode,
             prompt_extra=prompt_extra,
         ),
         on_retry=on_retry,

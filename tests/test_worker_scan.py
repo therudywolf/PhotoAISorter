@@ -75,6 +75,29 @@ def test_sort_worker_free_mode_allows_model_tag_folder(tmp_path: Path, monkeypat
     db.close()
 
 
+def test_sort_worker_auto_mode_chooses_popular_candidate(tmp_path: Path, monkeypatch: object) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    f = src / "a.jpg"
+    f.write_bytes(b"fake")
+
+    monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr(
+        "app.worker.chat_completion",
+        lambda *_a, **_k: "city/night, nature/forest/sunset, nature/forest/sunset",
+    )
+
+    db = Database(tmp_path / "state.sqlite3")
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=1, auto_tag_mode=True)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
+
+    assert (dst / "nature" / "forest" / "sunset" / "a.jpg").exists()
+    db.close()
+
+
 def test_sort_worker_retries_uncategorized_then_succeeds(tmp_path: Path, monkeypatch: object) -> None:
     src = tmp_path / "src"
     dst = tmp_path / "dst"

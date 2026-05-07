@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
-from app.categorizer import normalize_tag, normalize_tag_free
+from app.categorizer import normalize_tag, normalize_tag_auto, normalize_tag_free
 from app.constants import (
     CANONICAL_CATEGORY_WHITELIST,
     CLASSIFY_FILE_MAX_ATTEMPTS,
@@ -108,6 +108,7 @@ class SortWorker:
         api_key: str | None = None,
         workers: int = 3,
         free_tag_mode: bool = False,
+        auto_tag_mode: bool = False,
         prompt_extra: str = "",
     ) -> None:
         self.db = db
@@ -117,6 +118,7 @@ class SortWorker:
         self.api_key = api_key if api_key is not None else DEFAULT_API_KEY
         self.workers = max(1, min(4, int(workers)))
         self.free_tag_mode = bool(free_tag_mode)
+        self.auto_tag_mode = bool(auto_tag_mode)
         self.prompt_extra = str(prompt_extra or "")
 
         self._thread: threading.Thread | None = None
@@ -295,7 +297,8 @@ class SortWorker:
                                     api_key=self.api_key,
                                     on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
                                     on_log=lambda m: self._emit({"type": "log", "text": m}),
-                                    free_mode=self.free_tag_mode,
+                                    free_mode=self.free_tag_mode or self.auto_tag_mode,
+                                    auto_mode=self.auto_tag_mode,
                                     prompt_extra=self.prompt_extra,
                                 )
                         else:
@@ -307,10 +310,16 @@ class SortWorker:
                                 model=self.model,
                                 api_key=self.api_key,
                                 on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                                free_mode=self.free_tag_mode,
+                                free_mode=self.free_tag_mode or self.auto_tag_mode,
+                                auto_mode=self.auto_tag_mode,
                                 prompt_extra=self.prompt_extra,
                             )
-                            category = normalize_tag_free(raw) if self.free_tag_mode else normalize_tag(raw)
+                            if self.auto_tag_mode:
+                                category = normalize_tag_auto(raw)
+                            elif self.free_tag_mode:
+                                category = normalize_tag_free(raw)
+                            else:
+                                category = normalize_tag(raw)
                     except Exception as e:
                         metrics["api_errors"] += 1
                         _register_api_error(e)
@@ -324,7 +333,7 @@ class SortWorker:
                             }
                         )
                         category = UNCATEGORIZED
-                    if not self.free_tag_mode and category not in CANONICAL_CATEGORY_WHITELIST:
+                    if not (self.free_tag_mode or self.auto_tag_mode) and category not in CANONICAL_CATEGORY_WHITELIST:
                         category = UNCATEGORIZED
                     if category != UNCATEGORIZED:
                         break

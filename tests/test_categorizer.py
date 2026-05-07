@@ -1,6 +1,6 @@
 """Unit tests for tag normalization and merge."""
 
-from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_free
+from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_auto, normalize_tag_free
 from app.constants import UNCATEGORIZED
 
 
@@ -44,3 +44,13 @@ def test_legacy_alias_human_group_is_canonicalized() -> None:
 
 def test_legacy_alias_cars_is_canonicalized() -> None:
     assert normalize_tag("cars_and_bmw") == "vehicles_and_racing"
+
+
+def test_normalize_tag_auto_keeps_known_whitelist_tag() -> None:
+    raw = "best guess: vehicles_and_racing, road_trip/night"
+    assert normalize_tag_auto(raw) == "vehicles_and_racing"
+
+
+def test_normalize_tag_auto_picks_most_frequent_candidate() -> None:
+    raw = "nature/forest/sunset, city/night, nature/forest/sunset"
+    assert normalize_tag_auto(raw) == "nature/forest/sunset"
