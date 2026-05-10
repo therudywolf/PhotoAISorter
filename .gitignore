@@ -4,6 +4,23 @@ __pycache__/
 *$py.class
 .Python
 *.sqlite3
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+
+# Local app/runtime output
+_review_runs/
+duplicate_runs/
 
 # Локальная сборка ffmpeg (gyan essentials), не коммитить бинарники
 ffmpeg-runtime/

@@ -1,0 +1,21 @@
+{
+  "auto": "vehicles",
+  "autos": "vehicles",
+  "car": "vehicles",
+  "cars": "vehicles",
+  "vehicle": "vehicles",
+  "vehicles/cars": "vehicles",
+  "bmw": "vehicles/bmw",
+  "bmw/car": "vehicles/bmw",
+  "screen": "screenshots",
+  "screenshot": "screenshots",
+  "screens": "screenshots",
+  "chat": "screenshots/chat",
+  "messenger": "screenshots/chat",
+  "meme": "memes",
+  "memes/funny": "memes",
+  "ai art": "art/ai",
+  "generated": "art/ai",
+  "wallpaper": "art/wallpapers",
+  "wallpapers": "art/wallpapers"
+}

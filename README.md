@@ -39,6 +39,14 @@ Run tests:
 run.bat test
 ```
 
+The app does not require a committed API key. For servers that enforce bearer auth, set:
+
+```bash
+PHOTO_AI_SORTER_API_BASE=http://127.0.0.1:1234
+PHOTO_AI_SORTER_API_KEY=your-local-key
+PHOTO_AI_SORTER_MODEL=local-model
+```
+
 ## Manual Setup
 
 ```bash
@@ -70,6 +78,8 @@ Recommended model characteristics:
 - Enough context to process the classification prompt.
 
 Use `Benchmark` after refreshing models to probe the first visible candidates with the built-in vision test card. The best model is written into the active model profile.
+
+More setup notes are in [docs/LM_STUDIO.md](docs/LM_STUDIO.md).
 
 ## Model Profiles
 
@@ -116,6 +126,8 @@ Each line includes the source path, SHA-256, category, candidates, confidence, s
 
 Aliases apply to smart auto categories before folder names are created.
 
+See [examples/category_aliases.example.json](examples/category_aliases.example.json) for a larger starter map.
+
 ## Development Checks
 
 ```bash
@@ -124,3 +136,5 @@ python -m pytest -q
 ```
 
 The repository normalizes text files through `.gitattributes` and `.editorconfig` to keep diffs readable.
+
+Before publishing a release, use [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).

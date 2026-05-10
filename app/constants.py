@@ -240,12 +240,13 @@ class MediaScanMode(str, Enum):
     PHOTOS_AND_VIDEO = "photos_and_video"
     VIDEO_ONLY = "video_only"
 
-DEFAULT_API_BASE = "http://10.77.77.2:29931"
-# Дефолтный ключ в коде намеренно; PHOTO_AI_SORTER_API_KEY в env перекрывает его.
-DEFAULT_API_KEY = os.environ.get(
-    "PHOTO_AI_SORTER_API_KEY",
-    "sk-lm-GYikKNMF:U63StF1eS2aT7o0b3HEl",
+DEFAULT_API_BASE = (
+    os.environ.get("PHOTO_AI_SORTER_API_BASE", "http://127.0.0.1:1234").strip()
+    or "http://127.0.0.1:1234"
 )
+# LM Studio usually accepts requests without a real API key. If your OpenAI-compatible
+# server requires one, provide it through the environment instead of committing it.
+DEFAULT_API_KEY = os.environ.get("PHOTO_AI_SORTER_API_KEY", "")
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 MODELS_PATH = "/v1/models"
 
@@ -265,7 +266,7 @@ VISION_TEST_TIMEOUT_SEC = 90
 CHAT_COMPLETION_MAX_TOKENS = 1024
 VISION_PROBE_MAX_TOKENS = 512
 
-DEFAULT_MODEL = "local-model"
+DEFAULT_MODEL = os.environ.get("PHOTO_AI_SORTER_MODEL", "local-model").strip() or "local-model"
 
 LOG_MAX_LINES = 500
 

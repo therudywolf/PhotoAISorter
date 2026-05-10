@@ -7,6 +7,11 @@ import requests
 from app import lm_studio
 
 
+def test_empty_api_key_omits_authorization_header() -> None:
+    assert "Authorization" not in lm_studio._auth_headers_json("")
+    assert lm_studio._auth_headers_get("") == {}
+
+
 def test_retryable_request_error_channel_message() -> None:
     assert lm_studio._retryable_request_error(RuntimeError("Channel Error")) is True
 
