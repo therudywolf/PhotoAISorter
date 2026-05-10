@@ -6,19 +6,23 @@ import queue
 import threading
 import tkinter.filedialog as filedialog
 import tkinter.messagebox as messagebox
+import json
 from pathlib import Path
 
 import customtkinter as ctk
 
 from app.cache_service import CacheService
+from app.category_aliases import load_category_aliases, save_category_aliases, normalize_aliases
 from app.constants import CANONICAL_CATEGORIES, DEFAULT_API_BASE, DEFAULT_MODEL, LOG_MAX_LINES, MediaScanMode
 from app.db import Database
 from app.gui_duplicates import DuplicatesPane
+from app.model_profiles import ModelProfile, merge_profiles, profiles_to_settings
 from app.settings_store import load_gui_settings, save_gui_settings
 from app.signature_db import SignatureDatabase
 from app.task_state import TaskState
 from app.ui_texts import t
 from app.lm_studio import (
+    benchmark_models,
     find_model_object,
     full_api_self_test,
     list_models,
@@ -91,6 +95,15 @@ class App(ctk.CTk):
         )
         self._model_var = ctk.StringVar(value=t("lm.models.placeholder"))
         self._model_manual_var = ctk.StringVar(value=str(saved.get("model_manual", "") or ""))
+        self._model_profiles = merge_profiles(
+            saved.get("model_profiles", {}),
+            api_base=self._api_var.get(),
+            model=self._model_manual_var.get().strip() or DEFAULT_MODEL,
+        )
+        active_profile = str(saved.get("active_model_profile", "") or "classifier")
+        if active_profile not in self._model_profiles:
+            active_profile = "classifier"
+        self._active_model_profile_var = ctk.StringVar(value=active_profile)
         mm = str(saved.get("media_mode", "") or MediaScanMode.PHOTOS_ONLY.value)
         if mm not in {m.value for m in MediaScanMode}:
             mm = MediaScanMode.PHOTOS_ONLY.value
@@ -102,6 +115,7 @@ class App(ctk.CTk):
             _saved_mode = "free" if _saved_free else "strict"
         self._tag_mode_var = ctk.StringVar(value=_saved_mode)
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))
+        self._review_first_var = ctk.BooleanVar(value=bool(saved.get("review_first_sort", False)))
 
         self._build()
         if self._cache_clear_on_start:
@@ -126,6 +140,10 @@ class App(ctk.CTk):
         if v.startswith("—") or v == "":
             return DEFAULT_MODEL
         return v
+
+    def _active_profile(self) -> ModelProfile:
+        name = self._active_model_profile_var.get().strip() or "classifier"
+        return self._model_profiles.get(name) or self._model_profiles["classifier"]
 
     def _build(self) -> None:
         pad = {"padx": 12, "pady": 6}
@@ -253,6 +271,33 @@ class App(ctk.CTk):
             placeholder_text="Если пусто — берётся из списка выше",
         ).pack(side="left", fill="x", expand=True)
 
+        row_profile = ctk.CTkFrame(lm, fg_color="transparent")
+        row_profile.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(row_profile, text=t("lm.profile"), width=120, anchor="w").pack(side="left")
+        self._profile_combo = ctk.CTkComboBox(
+            row_profile,
+            values=sorted(self._model_profiles.keys()),
+            variable=self._active_model_profile_var,
+            width=220,
+            state="readonly",
+            command=lambda _v: self._apply_model_profile(),
+        )
+        self._profile_combo.pack(side="left", padx=(0, 8))
+        self._btn_profile_save = ctk.CTkButton(
+            row_profile,
+            text=t("lm.profile.save"),
+            width=150,
+            command=self._save_current_model_profile,
+        )
+        self._btn_profile_save.pack(side="left", padx=(0, 8))
+        self._btn_benchmark = ctk.CTkButton(
+            row_profile,
+            text=t("lm.benchmark"),
+            width=150,
+            command=self._on_benchmark_models,
+        )
+        self._btn_benchmark.pack(side="left")
+
         row_vis = ctk.CTkFrame(lm, fg_color="transparent")
         row_vis.pack(fill="x", padx=8, pady=(0, 8))
         self._vision_status = ctk.CTkLabel(
@@ -287,6 +332,20 @@ class App(ctk.CTk):
         ).pack(anchor="w", padx=8)
         self._prompt_extra = ctk.CTkEntry(prompt_box, textvariable=self._prompt_extra_var)
         self._prompt_extra.pack(fill="x", padx=8, pady=(0, 8))
+        prompt_btns = ctk.CTkFrame(prompt_box, fg_color="transparent")
+        prompt_btns.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(
+            prompt_btns,
+            text=t("prompt.composer"),
+            width=180,
+            command=self._open_prompt_composer,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            prompt_btns,
+            text=t("prompt.aliases"),
+            width=190,
+            command=self._open_category_aliases,
+        ).pack(side="left")
 
         btns = ctk.CTkFrame(P, fg_color="transparent")
         btns.pack(fill="x", **pad)
@@ -305,6 +364,12 @@ class App(ctk.CTk):
             command=self._on_clear_hash_cache,
         )
         self._btn_clear_cache.pack(side="left")
+        self._chk_review_first = ctk.CTkCheckBox(
+            btns,
+            text=t("sort.review_first"),
+            variable=self._review_first_var,
+        )
+        self._chk_review_first.pack(side="left", padx=(12, 0))
 
         prog_row = ctk.CTkFrame(P, fg_color="transparent")
         prog_row.pack(fill="x", **pad)
@@ -320,6 +385,13 @@ class App(ctk.CTk):
             text_color=("gray35", "gray65"),
         )
         self._eta_label.pack(pady=(0, 8))
+        self._health_label = ctk.CTkLabel(
+            prog_row,
+            text=t("health.idle"),
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray65"),
+        )
+        self._health_label.pack(pady=(0, 8))
 
         ctk.CTkLabel(P, text=t("log.title"), anchor="w").pack(anchor="w", padx=12)
         self._log = ctk.CTkTextbox(P, height=200)
@@ -369,6 +441,12 @@ class App(ctk.CTk):
         self._btn_vision_file.configure(state=st)
         self._btn_selftest.configure(state=st)
         self._btn_clear_cache.configure(state="disabled" if busy or self._running else "normal")
+        if hasattr(self, "_btn_benchmark"):
+            self._btn_benchmark.configure(state=st)
+        if hasattr(self, "_btn_profile_save"):
+            self._btn_profile_save.configure(state="disabled" if busy or self._running else "normal")
+        if hasattr(self, "_chk_review_first"):
+            self._chk_review_first.configure(state="disabled" if self._running else "normal")
 
     def _on_clear_hash_cache(self) -> None:
         if self._running:
@@ -489,11 +567,14 @@ class App(ctk.CTk):
                     "output_dir": self._out_var.get().strip(),
                     "api_base": self._api_var.get().strip(),
                     "model_manual": self._model_manual_var.get().strip(),
+                    "active_model_profile": self._active_model_profile_var.get().strip(),
+                    "model_profiles": profiles_to_settings(self._model_profiles),
                     "media_mode": self._media_mode_var.get().strip(),
                     "sort_workers": self._sort_workers_var.get().strip(),
                     "tag_mode": self._tag_mode_var.get(),
                     "free_tag_mode": self._tag_mode_var.get() == "free",
                     "prompt_extra": self._prompt_extra_var.get().strip(),
+                    "review_first_sort": bool(self._review_first_var.get()),
                     "user_context": self._context.get("1.0", "end").strip(),
                     "cache_settings": {
                         "clear_on_start": self._cache_clear_on_start,
@@ -510,6 +591,127 @@ class App(ctk.CTk):
         if not self._running:
             self._btn_start.configure(state="normal" if ok else "disabled")
         self._set_probe_busy(self._probe_busy)
+
+    def _apply_model_profile(self) -> None:
+        p = self._active_profile()
+        if p.api_base:
+            self._api_var.set(p.api_base)
+        if p.model:
+            self._model_manual_var.set(p.model)
+        self._sort_workers_var.set(str(p.workers))
+        if p.prompt_extra:
+            self._prompt_extra_var.set(p.prompt_extra)
+        self._append_log(t("lm.profile.applied", name=p.name, model=p.model or DEFAULT_MODEL))
+
+    def _save_current_model_profile(self) -> None:
+        name = self._active_model_profile_var.get().strip() or "classifier"
+        self._model_profiles[name] = ModelProfile(
+            name=name,
+            role=self._model_profiles.get(name, self._active_profile()).role,
+            api_base=self._api_var.get().strip() or DEFAULT_API_BASE,
+            model=self._model_resolved(),
+            workers=max(1, min(4, int(self._sort_workers_var.get().strip() or "3"))),
+            prompt_extra=self._prompt_extra_var.get().strip(),
+        )
+        self._profile_combo.configure(values=sorted(self._model_profiles.keys()))
+        self._save_gui_settings()
+        self._append_log(t("lm.profile.saved", name=name))
+
+    def _on_benchmark_models(self) -> None:
+        base = self._api_var.get().strip() or DEFAULT_API_BASE
+        models = list(self._model_combo.cget("values") or [])
+        models = [m for m in models if isinstance(m, str) and not m.startswith("—")]
+        if not models:
+            self._append_log(t("lm.benchmark.no_models"))
+            return
+
+        def work() -> None:
+            self.after(0, lambda: self._set_probe_busy(True))
+            try:
+                rows = benchmark_models(
+                    base,
+                    models,
+                    limit=8,
+                    on_progress=lambda msg: self.after(0, lambda m=msg: self._append_log(m)),
+                )
+            except Exception as e:
+                self.after(0, lambda: self._append_log(t("lm.benchmark.error", err=e)))
+                self.after(0, lambda: self._set_probe_busy(False))
+                return
+
+            def apply() -> None:
+                if not rows:
+                    self._append_log(t("lm.benchmark.empty"))
+                else:
+                    best = rows[0]
+                    self._model_manual_var.set(str(best["model"]))
+                    self._append_log(
+                        t(
+                            "lm.benchmark.best",
+                            model=best["model"],
+                            latency=best["latency_sec"],
+                            score=best["score"],
+                        )
+                    )
+                    self._save_current_model_profile()
+                self._set_probe_busy(False)
+
+            self.after(0, apply)
+
+        threading.Thread(target=work, daemon=True).start()
+        self._append_log(t("lm.benchmark.start", n=len(models)))
+
+    def _open_prompt_composer(self) -> None:
+        win = ctk.CTkToplevel(self)
+        win.title(t("prompt.composer.title"))
+        win.geometry("720x560")
+        win.transient(self)
+        ctk.CTkLabel(win, text=t("prompt.composer.context"), anchor="w").pack(anchor="w", padx=12, pady=(12, 4))
+        ctx = ctk.CTkTextbox(win, height=160)
+        ctx.pack(fill="x", padx=12, pady=(0, 8))
+        ctx.insert("1.0", self._context.get("1.0", "end").strip())
+        ctk.CTkLabel(win, text=t("prompt.composer.extra"), anchor="w").pack(anchor="w", padx=12, pady=(4, 4))
+        extra = ctk.CTkTextbox(win, height=220)
+        extra.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        extra.insert("1.0", self._prompt_extra_var.get().strip())
+
+        def apply() -> None:
+            self._context.delete("1.0", "end")
+            self._context.insert("1.0", ctx.get("1.0", "end").strip())
+            self._prompt_extra_var.set(extra.get("1.0", "end").strip())
+            self._save_current_model_profile()
+            win.destroy()
+
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(row, text=t("buttons.close"), command=win.destroy).pack(side="right")
+        ctk.CTkButton(row, text=t("buttons.apply"), command=apply).pack(side="right", padx=(0, 8))
+
+    def _open_category_aliases(self) -> None:
+        aliases = load_category_aliases()
+        win = ctk.CTkToplevel(self)
+        win.title(t("prompt.aliases.title"))
+        win.geometry("620x520")
+        win.transient(self)
+        ctk.CTkLabel(win, text=t("prompt.aliases.hint"), anchor="w", justify="left").pack(fill="x", padx=12, pady=(12, 6))
+        tb = ctk.CTkTextbox(win, height=390)
+        tb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        tb.insert("1.0", json.dumps(aliases, ensure_ascii=False, indent=2, sort_keys=True))
+
+        def save() -> None:
+            try:
+                raw = json.loads(tb.get("1.0", "end").strip() or "{}")
+                save_category_aliases(normalize_aliases(raw))
+            except (OSError, json.JSONDecodeError) as e:
+                messagebox.showerror(t("cache.error"), str(e))
+                return
+            self._append_log(t("prompt.aliases.saved"))
+            win.destroy()
+
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(row, text=t("buttons.close"), command=win.destroy).pack(side="right")
+        ctk.CTkButton(row, text=t("buttons.save"), command=save).pack(side="right", padx=(0, 8))
 
     def _pick_in(self) -> None:
         d = filedialog.askdirectory(title="Папка с файлами для сортировки")
@@ -705,6 +907,8 @@ class App(ctk.CTk):
         self._save_gui_settings()
 
         workers = max(1, min(4, int(self._sort_workers_var.get().strip() or "3")))
+        profile = self._active_profile()
+        aliases = load_category_aliases()
         self._worker = SortWorker(
             self._db,
             self._msg_queue,
@@ -713,6 +917,12 @@ class App(ctk.CTk):
             workers=workers,
             free_tag_mode=tag_mode == "free",
             auto_tag_mode=tag_mode == "auto",
+            structured_output=True,
+            review_first=bool(self._review_first_var.get()),
+            category_aliases=aliases,
+            temperature=profile.temperature,
+            max_tokens=profile.max_tokens,
+            request_timeout_sec=profile.timeout_sec,
         )
         prompt_extra = self._prompt_extra_var.get().strip()
         self._worker.prompt_extra = prompt_extra
@@ -807,6 +1017,17 @@ class App(ctk.CTk):
             name = str(msg.get("name", "metric"))
             payload = msg.get("payload", {})
             self._append_log(f"[metrics:{name}] {payload}")
+        elif msg_type == "health":
+            payload = msg.get("payload", {})
+            self._health_label.configure(
+                text=t(
+                    "health.api",
+                    calls=payload.get("api_calls", 0),
+                    avg=payload.get("avg_api_sec", 0),
+                    errors=payload.get("api_errors", 0),
+                    review=payload.get("needs_review", 0),
+                )
+            )
 
     def on_close(self) -> None:
         if self._worker:
@@ -824,4 +1045,3 @@ def main() -> None:
     app = App()
     app.protocol("WM_DELETE_WINDOW", app.on_close)
     app.mainloop()
-

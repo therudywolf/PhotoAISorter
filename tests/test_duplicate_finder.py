@@ -91,6 +91,7 @@ def test_signature_cache_hit_and_force_recompute(tmp_path: Path) -> None:
     row1 = db.get_row(str(p.resolve()))
     assert row1 is not None
     assert row1["sig_version"] == SIG_CACHE_VERSION
+    assert row1["colorhash_hex"]
     sha1 = row1["sha256"]
 
     compute_one_signature(p, db, opts, force_recompute=False, on_log=log)

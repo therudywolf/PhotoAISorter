@@ -12,7 +12,7 @@ from typing import Any
 
 from app.db import default_db_path
 
-SIG_CACHE_VERSION = "2026-04-08-v3"
+SIG_CACHE_VERSION = "2026-05-10-v4"
 
 
 def signatures_db_path() -> Path:
@@ -72,6 +72,7 @@ class SignatureDatabase:
                 sha256 TEXT,
                 phash_hex TEXT,
                 dhash_hex TEXT,
+                colorhash_hex TEXT,
                 sig_version TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_sig_mtime ON file_signatures(mtime_ns);
@@ -117,6 +118,9 @@ class SignatureDatabase:
         if "phash_frames_json" not in cols:
             self._conn.execute("ALTER TABLE file_signatures ADD COLUMN phash_frames_json TEXT")
             self._conn.commit()
+        if "colorhash_hex" not in cols:
+            self._conn.execute("ALTER TABLE file_signatures ADD COLUMN colorhash_hex TEXT")
+            self._conn.commit()
 
     def get_row(self, path_norm: str) -> sqlite3.Row | None:
         with self._lock:
@@ -132,6 +136,7 @@ class SignatureDatabase:
         sha256: str | None,
         phash_hex: str | None,
         dhash_hex: str | None,
+        colorhash_hex: str | None = None,
         phash_frames_json: str | None = None,
     ) -> None:
         with self._lock:
@@ -139,8 +144,8 @@ class SignatureDatabase:
                 """
                 INSERT INTO file_signatures (
                     path_norm, mtime_ns, size_bytes, width, height,
-                    sha256, phash_hex, dhash_hex, phash_frames_json, sig_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sha256, phash_hex, dhash_hex, colorhash_hex, phash_frames_json, sig_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path_norm) DO UPDATE SET
                     mtime_ns = excluded.mtime_ns,
                     size_bytes = excluded.size_bytes,
@@ -149,6 +154,7 @@ class SignatureDatabase:
                     sha256 = excluded.sha256,
                     phash_hex = excluded.phash_hex,
                     dhash_hex = excluded.dhash_hex,
+                    colorhash_hex = excluded.colorhash_hex,
                     phash_frames_json = excluded.phash_frames_json,
                     sig_version = excluded.sig_version
                 """,
@@ -161,6 +167,7 @@ class SignatureDatabase:
                     sha256,
                     phash_hex,
                     dhash_hex,
+                    colorhash_hex,
                     phash_frames_json,
                     SIG_CACHE_VERSION,
                 ),

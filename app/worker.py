@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.categorizer import normalize_tag, normalize_tag_auto, normalize_tag_free
+from app.category_aliases import aliases_to_prompt_lines
+from app.classification_result import ClassificationResult, parse_classification_result
 from app.constants import (
     CANONICAL_CATEGORY_WHITELIST,
     CLASSIFY_FILE_MAX_ATTEMPTS,
@@ -29,7 +31,8 @@ from app.constants import (
 )
 from app.db import Database
 from app.images import file_sha256, image_to_jpeg_base64_data_uri, pil_image_to_jpeg_data_uri
-from app.lm_studio import chat_completion, classify_frames
+from app.lm_studio import CHAT_COMPLETION_MAX_TOKENS, chat_completion, chat_completion_multi, classify_frames
+from app.review_manifest import SortReviewManifest
 from app.task_state import TaskState
 from app.video_frames import extract_frames_reduced, is_animated_gif
 
@@ -118,6 +121,12 @@ class SortWorker:
         free_tag_mode: bool = False,
         auto_tag_mode: bool = False,
         prompt_extra: str = "",
+        structured_output: bool = True,
+        review_first: bool = False,
+        category_aliases: dict[str, str] | None = None,
+        temperature: float = 0.2,
+        max_tokens: int = CHAT_COMPLETION_MAX_TOKENS,
+        request_timeout_sec: float | None = None,
     ) -> None:
         self.db = db
         self.out_queue = out_queue
@@ -128,6 +137,12 @@ class SortWorker:
         self.free_tag_mode = bool(free_tag_mode)
         self.auto_tag_mode = bool(auto_tag_mode)
         self.prompt_extra = str(prompt_extra or "")
+        self.structured_output = bool(structured_output)
+        self.review_first = bool(review_first)
+        self.category_aliases = dict(category_aliases or {})
+        self.temperature = max(0.0, min(2.0, float(temperature)))
+        self.max_tokens = max(1, min(4096, int(max_tokens)))
+        self.request_timeout_sec = request_timeout_sec
 
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -184,7 +199,17 @@ class SortWorker:
     ) -> None:
         finish_reason = "completed"
         started_ts = time.monotonic()
-        metrics = {"cache_skip": 0, "api_errors": 0, "copied": 0, "copy_errors": 0, "no_space": 0}
+        metrics = {
+            "cache_skip": 0,
+            "api_errors": 0,
+            "copied": 0,
+            "copy_errors": 0,
+            "no_space": 0,
+            "api_calls": 0,
+            "api_latency_sec": 0.0,
+            "needs_review": 0,
+            "review_written": 0,
+        }
         try:
             self._emit({"type": "state_changed", "state": TaskState.RUNNING.value})
             source_dir = source_dir.resolve()
@@ -206,6 +231,20 @@ class SortWorker:
                     )
             total = len(files)
             self._emit({"type": "scan_done", "total": total})
+            tag_mode = "auto" if self.auto_tag_mode else ("free" if self.free_tag_mode else "strict")
+            manifest = (
+                SortReviewManifest(
+                    dest_dir,
+                    source_dir=source_dir,
+                    media_mode=media_mode.value,
+                    tag_mode=tag_mode,
+                    model=self.model,
+                )
+                if self.review_first
+                else None
+            )
+            if manifest is not None:
+                self._emit({"type": "log", "text": f"Review-first manifest: {manifest.path}"})
 
             done = 0
             prog_lock = threading.Lock()
@@ -272,6 +311,85 @@ class SortWorker:
                         }
                     )
 
+            def _mode_name() -> str:
+                if self.auto_tag_mode:
+                    return "auto"
+                if self.free_tag_mode:
+                    return "free"
+                return "strict"
+
+            def _prompt_for_request() -> str:
+                alias_block = aliases_to_prompt_lines(self.category_aliases)
+                if alias_block and self.prompt_extra.strip():
+                    return self.prompt_extra.strip() + "\n\n" + alias_block
+                return alias_block or self.prompt_extra
+
+            def _timeout() -> tuple[float, float] | None:
+                if self.request_timeout_sec is None:
+                    return None
+                return (30.0, max(30.0, float(self.request_timeout_sec)))
+
+            def _result_from_raw(raw: str) -> ClassificationResult:
+                return parse_classification_result(
+                    raw,
+                    mode=_mode_name(),  # type: ignore[arg-type]
+                    aliases=self.category_aliases,
+                )
+
+            def _emit_health(last_api_sec: float | None = None) -> None:
+                avg = (
+                    metrics["api_latency_sec"] / metrics["api_calls"]
+                    if metrics["api_calls"] > 0
+                    else 0.0
+                )
+                self._emit(
+                    {
+                        "type": "health",
+                        "payload": {
+                            "model": self.model,
+                            "api_calls": metrics["api_calls"],
+                            "avg_api_sec": round(avg, 2),
+                            "last_api_sec": round(last_api_sec or 0.0, 2),
+                            "api_errors": metrics["api_errors"],
+                            "needs_review": metrics["needs_review"],
+                            "review_written": metrics["review_written"],
+                        },
+                    }
+                )
+
+            def _record_review(
+                path: Path,
+                digest: str,
+                result: ClassificationResult,
+                *,
+                copied_to: str | None = None,
+            ) -> None:
+                if manifest is None and not result.needs_review:
+                    return
+                review_dir = manifest
+                if review_dir is None:
+                    return
+                try:
+                    st = path.stat()
+                    size_bytes = int(st.st_size)
+                except OSError:
+                    size_bytes = 0
+                review_dir.append(
+                    {
+                        "source_path": str(path),
+                        "sha256": digest,
+                        "size_bytes": size_bytes,
+                        "category": result.category,
+                        "candidates": result.candidates,
+                        "confidence": result.confidence,
+                        "reason_short": result.reason_short,
+                        "needs_review": result.needs_review,
+                        "copied_to": copied_to,
+                        "raw_model_output": result.raw_text[:4000],
+                    }
+                )
+                metrics["review_written"] += 1
+
             def process_one(path: Path) -> None:
                 if self._stop.is_set():
                     return
@@ -297,6 +415,7 @@ class SortWorker:
                     return
 
                 category = UNCATEGORIZED
+                result = ClassificationResult(UNCATEGORIZED, [], 0.0, "", True, "")
                 for attempt in range(1, CLASSIFY_FILE_MAX_ATTEMPTS + 1):
                     try:
                         suf = path.suffix.lower()
@@ -318,39 +437,80 @@ class SortWorker:
                                     }
                                 )
                                 category = UNCATEGORIZED
+                                result = ClassificationResult(UNCATEGORIZED, [], 0.0, "no_frames_decoded", True, "")
                             else:
                                 uris = [pil_image_to_jpeg_data_uri(im) for im in frames]
-                                category = classify_frames(
-                                    uris,
-                                    user_context,
-                                    api_base=self.api_base,
-                                    model=self.model,
-                                    api_key=self.api_key,
-                                    on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                                    on_log=lambda m: self._emit({"type": "log", "text": m}),
-                                    free_mode=self.free_tag_mode or self.auto_tag_mode,
-                                    auto_mode=self.auto_tag_mode,
-                                    prompt_extra=self.prompt_extra,
-                                )
+                                api_t0 = time.monotonic()
+                                if self.structured_output:
+                                    raw = chat_completion_multi(
+                                        uris[:VIDEO_FRAME_COUNT],
+                                        user_context,
+                                        api_base=self.api_base,
+                                        model=self.model,
+                                        api_key=self.api_key,
+                                        timeout=_timeout(),
+                                        on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
+                                        free_mode=self.free_tag_mode or self.auto_tag_mode,
+                                        auto_mode=self.auto_tag_mode,
+                                        prompt_extra=_prompt_for_request(),
+                                        structured_output=True,
+                                        temperature=self.temperature,
+                                        max_tokens=self.max_tokens,
+                                    )
+                                    result = _result_from_raw(raw)
+                                    category = result.category
+                                else:
+                                    category = classify_frames(
+                                        uris,
+                                        user_context,
+                                        api_base=self.api_base,
+                                        model=self.model,
+                                        api_key=self.api_key,
+                                        timeout=_timeout(),
+                                        on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
+                                        on_log=lambda m: self._emit({"type": "log", "text": m}),
+                                        free_mode=self.free_tag_mode or self.auto_tag_mode,
+                                        auto_mode=self.auto_tag_mode,
+                                        prompt_extra=_prompt_for_request(),
+                                    )
+                                    result = ClassificationResult(category, [category], 0.75, "legacy_video_output", category == UNCATEGORIZED, "")
+                                api_sec = time.monotonic() - api_t0
+                                metrics["api_calls"] += 1
+                                metrics["api_latency_sec"] += api_sec
+                                _emit_health(api_sec)
                         else:
                             data_uri = image_to_jpeg_base64_data_uri(path)
+                            api_t0 = time.monotonic()
                             raw = chat_completion(
                                 data_uri,
                                 user_context,
                                 api_base=self.api_base,
                                 model=self.model,
                                 api_key=self.api_key,
+                                timeout=_timeout(),
                                 on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
                                 free_mode=self.free_tag_mode or self.auto_tag_mode,
                                 auto_mode=self.auto_tag_mode,
-                                prompt_extra=self.prompt_extra,
+                                prompt_extra=_prompt_for_request(),
+                                structured_output=self.structured_output,
+                                temperature=self.temperature,
+                                max_tokens=self.max_tokens,
                             )
-                            if self.auto_tag_mode:
-                                category = normalize_tag_auto(raw)
-                            elif self.free_tag_mode:
+                            api_sec = time.monotonic() - api_t0
+                            metrics["api_calls"] += 1
+                            metrics["api_latency_sec"] += api_sec
+                            result = _result_from_raw(raw)
+                            category = result.category
+                            if not self.structured_output and self.auto_tag_mode:
+                                category = normalize_tag_auto(raw, extra_aliases=self.category_aliases)
+                                result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
+                            elif not self.structured_output and self.free_tag_mode:
                                 category = normalize_tag_free(raw)
-                            else:
+                                result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
+                            elif not self.structured_output:
                                 category = normalize_tag(raw)
+                                result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
+                            _emit_health(api_sec)
                     except Exception as e:
                         metrics["api_errors"] += 1
                         _register_api_error(e)
@@ -366,6 +526,7 @@ class SortWorker:
                         category = UNCATEGORIZED
                     if not (self.free_tag_mode or self.auto_tag_mode) and category not in CANONICAL_CATEGORY_WHITELIST:
                         category = UNCATEGORIZED
+                        result = ClassificationResult(UNCATEGORIZED, result.candidates, result.confidence, result.reason_short, True, result.raw_text)
                     if category != UNCATEGORIZED:
                         break
                     if attempt < CLASSIFY_FILE_MAX_ATTEMPTS:
@@ -384,8 +545,20 @@ class SortWorker:
                 if self._stop.is_set():
                     complete_task(time.monotonic() - t0)
                     return
+                if result.needs_review:
+                    metrics["needs_review"] += 1
 
                 tag_dir = dest_dir / category
+                if self.review_first:
+                    _record_review(path, digest, result)
+                    self._emit(
+                        {
+                            "type": "log",
+                            "text": f"review: {path.name} -> {category} ({result.confidence:.2f})",
+                        }
+                    )
+                    complete_task(time.monotonic() - t0)
+                    return
                 try:
                     if not has_disk_space_for_copy(dest_dir, path):
                         metrics["no_space"] += 1
@@ -404,6 +577,7 @@ class SortWorker:
                             shutil.copy2(path, dest_file)
                         self.db.mark_processed(digest, category, PIPELINE_VERSION)
                         metrics["copied"] += 1
+                        _record_review(path, digest, result, copied_to=str(dest_file))
                         self._emit({"type": "log", "text": f"{path.name} -> {category}"})
                 except OSError as e:
                     metrics["copy_errors"] += 1
@@ -460,6 +634,15 @@ class SortWorker:
                         "copied": metrics["copied"],
                         "copy_errors": metrics["copy_errors"],
                         "no_space": metrics["no_space"],
+                        "api_calls": metrics["api_calls"],
+                        "avg_api_sec": round(
+                            metrics["api_latency_sec"] / metrics["api_calls"],
+                            2,
+                        )
+                        if metrics["api_calls"]
+                        else 0.0,
+                        "needs_review": metrics["needs_review"],
+                        "review_written": metrics["review_written"],
                     },
                 }
             )
@@ -492,5 +675,4 @@ class SortWorker:
 
         self._thread = threading.Thread(target=target, daemon=True)
         self._thread.start()
-
 

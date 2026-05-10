@@ -25,10 +25,12 @@ class DuplicateFinderOptions:
     strictness: Literal["fast", "balanced", "strict", "deep"] = "balanced"
     include_exact: bool = True
     include_perceptual: bool = True
+    include_semantic: bool = False
     use_llm_pairs: bool = False
     phash_max_hamming: int = 10
     dhash_max_hamming: int = 12
     phash_video_mean_max: int = 7
+    colorhash_max_hamming: int = 8
     llm_hamming_min: int = 6
     llm_hamming_max: int = 14
     hash_max_side: int = 256
@@ -43,6 +45,7 @@ _PRESETS: dict[str, DuplicateFinderOptions] = {
         strictness="fast",
         include_exact=True,
         include_perceptual=False,
+        include_semantic=False,
         use_llm_pairs=False,
         phash_max_hamming=8,
         dhash_max_hamming=12,
@@ -57,6 +60,7 @@ _PRESETS: dict[str, DuplicateFinderOptions] = {
         strictness="balanced",
         include_exact=True,
         include_perceptual=True,
+        include_semantic=False,
         use_llm_pairs=False,
         phash_max_hamming=10,
         dhash_max_hamming=12,
@@ -71,6 +75,7 @@ _PRESETS: dict[str, DuplicateFinderOptions] = {
         strictness="strict",
         include_exact=True,
         include_perceptual=True,
+        include_semantic=False,
         use_llm_pairs=True,
         phash_max_hamming=8,
         dhash_max_hamming=10,
@@ -85,6 +90,7 @@ _PRESETS: dict[str, DuplicateFinderOptions] = {
         strictness="deep",
         include_exact=True,
         include_perceptual=True,
+        include_semantic=True,
         use_llm_pairs=True,
         phash_max_hamming=12,
         dhash_max_hamming=14,
@@ -108,10 +114,12 @@ def merge_options_from_dict(d: dict[str, Any], base: DuplicateFinderOptions) -> 
     o.strictness = str(d.get("strictness", o.strictness)) if str(d.get("strictness", o.strictness)) in _PRESETS else o.strictness
     o.include_exact = bool(d.get("include_exact", o.include_exact))
     o.include_perceptual = bool(d.get("include_perceptual", o.include_perceptual))
+    o.include_semantic = bool(d.get("include_semantic", o.include_semantic))
     o.use_llm_pairs = bool(d.get("use_llm_pairs", o.use_llm_pairs))
     o.phash_max_hamming = max(0, min(64, int(d.get("phash_max_hamming", o.phash_max_hamming))))
     o.dhash_max_hamming = max(0, min(64, int(d.get("dhash_max_hamming", o.dhash_max_hamming))))
     o.phash_video_mean_max = max(1, min(32, int(d.get("phash_video_mean_max", o.phash_video_mean_max))))
+    o.colorhash_max_hamming = max(1, min(64, int(d.get("colorhash_max_hamming", o.colorhash_max_hamming))))
     o.llm_hamming_min = max(0, min(64, int(d.get("llm_hamming_min", o.llm_hamming_min))))
     o.llm_hamming_max = max(0, min(64, int(d.get("llm_hamming_max", o.llm_hamming_max))))
     o.hash_max_side = max(64, min(512, int(d.get("hash_max_side", o.hash_max_side))))
@@ -131,10 +139,12 @@ def options_to_dict(o: DuplicateFinderOptions) -> dict[str, Any]:
         "strictness": o.strictness,
         "include_exact": o.include_exact,
         "include_perceptual": o.include_perceptual,
+        "include_semantic": o.include_semantic,
         "use_llm_pairs": o.use_llm_pairs,
         "phash_max_hamming": o.phash_max_hamming,
         "dhash_max_hamming": o.dhash_max_hamming,
         "phash_video_mean_max": o.phash_video_mean_max,
+        "colorhash_max_hamming": o.colorhash_max_hamming,
         "llm_hamming_min": o.llm_hamming_min,
         "llm_hamming_max": o.llm_hamming_max,
         "hash_max_side": o.hash_max_side,
@@ -156,6 +166,7 @@ class FileDupInfo:
     sha256: str | None
     phash: imagehash.ImageHash | None
     dhash: imagehash.ImageHash | None
+    colorhash: imagehash.ImageHash | None = None
     phash_frames: list[imagehash.ImageHash] | None = None
 
 
@@ -310,14 +321,14 @@ def _parse_phash_frames_json(raw: str | None) -> list[imagehash.ImageHash] | Non
         return None
 
 
-def _hashes(im: Image.Image, max_side: int) -> tuple[imagehash.ImageHash, imagehash.ImageHash]:
+def _hashes(im: Image.Image, max_side: int) -> tuple[imagehash.ImageHash, imagehash.ImageHash, imagehash.ImageHash]:
     im = _pil_to_rgb(im)
     w, h = im.size
     long = max(w, h)
     if long > max_side:
         k = max_side / float(long)
         im = im.resize((max(1, int(round(w * k))), max(1, int(round(h * k)))), Image.Resampling.LANCZOS)
-    return imagehash.phash(im), imagehash.dhash(im)
+    return imagehash.phash(im), imagehash.dhash(im), imagehash.colorhash(im)
 
 
 def _hamming(a: imagehash.ImageHash | None, b: imagehash.ImageHash | None) -> int:
@@ -327,6 +338,15 @@ def _hamming(a: imagehash.ImageHash | None, b: imagehash.ImageHash | None) -> in
 
 
 def _phash_int(h: imagehash.ImageHash | None) -> int | None:
+    if h is None:
+        return None
+    try:
+        return int(str(h), 16)
+    except ValueError:
+        return None
+
+
+def _hash_int(h: imagehash.ImageHash | None) -> int | None:
     if h is None:
         return None
     try:
@@ -354,6 +374,24 @@ def _phash_candidate_pairs(
     out: list[tuple[int, int]] = []
     for idx in idxs:
         key = _phash_int(records[idx].phash)
+        if key is None:
+            continue
+        for prev in tree.query(key, max_dist):
+            out.append((prev, idx))
+        tree.insert(key, idx)
+    return out
+
+
+def _hash_candidate_pairs(
+    idxs: list[int],
+    hash_getter: Callable[[FileDupInfo], imagehash.ImageHash | None],
+    records: list[FileDupInfo],
+    max_dist: int,
+) -> list[tuple[int, int]]:
+    tree = _BKTree()
+    out: list[tuple[int, int]] = []
+    for idx in idxs:
+        key = _hash_int(hash_getter(records[idx]))
         if key is None:
             continue
         for prev in tree.query(key, max_dist):
@@ -453,14 +491,27 @@ def collect_llm_verification_pairs(
         buckets[key].append(i)
     for key in sorted(buckets.keys()):
         idxs = buckets[key]
-        for ia, ib in _phash_candidate_pairs(idxs, records, options.llm_hamming_max):
+        candidate_pairs = _phash_candidate_pairs(idxs, records, options.llm_hamming_max)
+        if options.include_semantic:
+            candidate_pairs.extend(
+                _hash_candidate_pairs(idxs, lambda r: r.colorhash, records, options.colorhash_max_hamming)
+            )
+        seen_pairs: set[tuple[int, int]] = set()
+        for ia, ib in candidate_pairs:
+            pair_key = (ia, ib) if ia < ib else (ib, ia)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
             ai, bi = records[ia], records[ib]
             if not _likely_candidate(ai, bi):
                 continue
             if ai.sha256 and bi.sha256 and ai.sha256 == bi.sha256:
                 continue
-            h = int(ai.phash - bi.phash)
-            if options.llm_hamming_min <= h <= options.llm_hamming_max:
+            hp = _hamming(ai.phash, bi.phash)
+            hc = _hamming(ai.colorhash, bi.colorhash)
+            if options.llm_hamming_min <= hp <= options.llm_hamming_max or (
+                options.include_semantic and hc <= options.colorhash_max_hamming
+            ):
                 pairs.append((ai, bi))
                 if len(pairs) >= max_pairs:
                     return pairs
@@ -502,9 +553,11 @@ def compute_one_signature(
         try:
             ph = imagehash.hex_to_hash(str(row["phash_hex"]))
             dh = imagehash.hex_to_hash(str(row["dhash_hex"])) if row["dhash_hex"] else None
+            ch = imagehash.hex_to_hash(str(row["colorhash_hex"])) if row["colorhash_hex"] else None
         except Exception:
             ph = None
             dh = None
+            ch = None
         if ph is not None:
             pf = _parse_phash_frames_json(str(pj) if frames_json_ok else None)
             return FileDupInfo(
@@ -517,6 +570,7 @@ def compute_one_signature(
                 sha256=str(row["sha256"]) if row["sha256"] else None,
                 phash=ph,
                 dhash=dh,
+                colorhash=ch,
                 phash_frames=pf,
             )
 
@@ -533,20 +587,33 @@ def compute_one_signature(
             sha = None
     ph_list: list[imagehash.ImageHash] = []
     dh0: imagehash.ImageHash | None = None
+    ch0: imagehash.ImageHash | None = None
     for i, im in enumerate(frames):
-        ph_i, dh_i = _hashes(im, options.hash_max_side)
+        ph_i, dh_i, ch_i = _hashes(im, options.hash_max_side)
         ph_list.append(ph_i)
         if i == 0:
             dh0 = dh_i
+            ch0 = ch_i
     ph = ph_list[0]
     phash_frames_json: str | None = None
     phash_frames: list[imagehash.ImageHash] | None = None
     if multi and len(ph_list) >= 2:
         phash_frames_json = json.dumps([str(x) for x in ph_list])
         phash_frames = ph_list
-    sig_db.upsert_signature(path_norm, mtime_ns, size_b, width, height, sha, str(ph), str(dh0) if dh0 else None, phash_frames_json)
+    sig_db.upsert_signature(
+        path_norm,
+        mtime_ns,
+        size_b,
+        width,
+        height,
+        sha,
+        str(ph),
+        str(dh0) if dh0 else None,
+        str(ch0) if ch0 else None,
+        phash_frames_json,
+    )
     return FileDupInfo(
-        path, path_norm, size_b, mtime_ns, width, height, sha, ph, dh0, phash_frames=phash_frames
+        path, path_norm, size_b, mtime_ns, width, height, sha, ph, dh0, colorhash=ch0, phash_frames=phash_frames
     )
 
 
@@ -714,6 +781,7 @@ def load_records_from_db(paths: list[Path], sig_db: SignatureDatabase, options: 
         try:
             ph = imagehash.hex_to_hash(str(row["phash_hex"]))
             dh = imagehash.hex_to_hash(str(row["dhash_hex"])) if row["dhash_hex"] else None
+            ch = imagehash.hex_to_hash(str(row["colorhash_hex"])) if row["colorhash_hex"] else None
         except Exception:
             continue
         try:
@@ -732,6 +800,7 @@ def load_records_from_db(paths: list[Path], sig_db: SignatureDatabase, options: 
                 sha256=str(row["sha256"]) if row["sha256"] else None,
                 phash=ph,
                 dhash=dh,
+                colorhash=ch,
                 phash_frames=pf,
             )
         )

@@ -62,6 +62,7 @@ def build_classification_system_prompt(
     free_mode: bool = False,
     auto_mode: bool = False,
     prompt_extra: str = "",
+    structured_output: bool = False,
 ) -> str:
     """Системный текст: базовые правила + приоритеты + определения по тегам + USER_CONTEXT."""
     if auto_mode:
@@ -85,11 +86,21 @@ def build_classification_system_prompt(
             "and no conversational ability. Your ONLY job is to output a single exact string from this "
             f"list: {', '.join(CATEGORIES)}."
         )
+    output_rule = (
+        "Output a single compact JSON object with keys: primary_category, candidates, confidence, "
+        "reason_short, needs_review. primary_category and candidates must use lowercase tag strings only. "
+        "confidence is 0..1. reason_short must be short. If unsure, set primary_category to "
+        f"{UNCATEGORIZED}, confidence below 0.55, and needs_review true."
+        if structured_output
+        else (
+            "Do not apologize, do not explain, do not refuse. Output ONLY the raw tag, lowercase, "
+            f"no punctuation. If unsure, output {UNCATEGORIZED}."
+        )
+    )
     parts: list[str] = [
         header,
-        "Do not apologize, do not explain, do not refuse. Output ONLY the raw tag, lowercase, "
-        f"no punctuation. If unsure, output {UNCATEGORIZED}.",
-        "Do not write long reasoning. If you must think, end with a new line containing ONLY the tag.",
+        output_rule,
+        "Do not write long reasoning. If you must think, put only the final answer after it.",
         "",
         PRIORITY_RULES_BLOCK,
         "",
@@ -222,6 +233,7 @@ def build_messages(
     free_mode: bool = False,
     auto_mode: bool = False,
     prompt_extra: str = "",
+    structured_output: bool = False,
 ) -> list[dict[str, Any]]:
     """System + user with vision image_url (OpenAI-compatible)."""
     system_text = build_classification_system_prompt(
@@ -229,6 +241,7 @@ def build_messages(
         free_mode=free_mode,
         auto_mode=auto_mode,
         prompt_extra=prompt_extra,
+        structured_output=structured_output,
     )
     return [
         {"role": "system", "content": system_text},
@@ -241,6 +254,11 @@ def build_messages(
                         "Classify this image. Output exactly one final tag only, no explanation. "
                         "In free mode this may be a hierarchical slash-separated tag. "
                         "In auto mode output comma-separated candidates with the best first."
+                        if not structured_output
+                        else (
+                            "Classify this image. Return one compact JSON object only. "
+                            "Use primary_category plus candidates sorted best first."
+                        )
                     ),
                 },
                 {"type": "image_url", "image_url": {"url": image_data_uri}},
@@ -256,6 +274,7 @@ def build_messages_multi(
     free_mode: bool = False,
     auto_mode: bool = False,
     prompt_extra: str = "",
+    structured_output: bool = False,
 ) -> list[dict[str, Any]]:
     """Several frames from one video/GIF — один тег на весь контент."""
     system_text = build_classification_system_prompt(
@@ -263,6 +282,7 @@ def build_messages_multi(
         free_mode=free_mode,
         auto_mode=auto_mode,
         prompt_extra=prompt_extra,
+        structured_output=structured_output,
     )
     user_parts: list[dict[str, Any]] = [
         {
@@ -272,6 +292,11 @@ def build_messages_multi(
                 "Classify the entire content with exactly one final tag only, no explanation. "
                 "In free mode this may be a hierarchical slash-separated tag. "
                 "In auto mode output comma-separated candidates with the best first."
+                if not structured_output
+                else (
+                    "These images are frames from the same video file in chronological order. "
+                    "Classify the entire content. Return one compact JSON object only."
+                )
             ),
         },
     ]
@@ -294,6 +319,9 @@ def _chat_completion_once(
     free_mode: bool,
     auto_mode: bool,
     prompt_extra: str,
+    structured_output: bool,
+    temperature: float,
+    max_tokens: int,
 ) -> str:
     base = api_base.rstrip("/")
     url = f"{base}{CHAT_COMPLETIONS_PATH}"
@@ -305,9 +333,10 @@ def _chat_completion_once(
             free_mode=free_mode,
             auto_mode=auto_mode,
             prompt_extra=prompt_extra,
+            structured_output=structured_output,
         ),
-        "temperature": 0.2,
-        "max_tokens": CHAT_COMPLETION_MAX_TOKENS,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
     r = requests.post(
         url,
@@ -341,6 +370,9 @@ def _chat_completion_multi_once(
     free_mode: bool,
     auto_mode: bool,
     prompt_extra: str,
+    structured_output: bool,
+    temperature: float,
+    max_tokens: int,
 ) -> str:
     if not image_data_uris:
         raise ValueError("no images")
@@ -354,9 +386,10 @@ def _chat_completion_multi_once(
             free_mode=free_mode,
             auto_mode=auto_mode,
             prompt_extra=prompt_extra,
+            structured_output=structured_output,
         ),
-        "temperature": 0.2,
-        "max_tokens": CHAT_COMPLETION_MAX_TOKENS,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
     r = requests.post(
         url,
@@ -391,6 +424,9 @@ def chat_completion_multi(
     free_mode: bool = False,
     auto_mode: bool = False,
     prompt_extra: str = "",
+    structured_output: bool = False,
+    temperature: float = 0.2,
+    max_tokens: int = CHAT_COMPLETION_MAX_TOKENS,
 ) -> str:
     """Multi-image POST с теми же ретраями, что и chat_completion."""
     t = timeout if timeout is not None else (REQUEST_CONNECT_TIMEOUT_SEC, REQUEST_READ_TIMEOUT_SEC)
@@ -405,6 +441,9 @@ def chat_completion_multi(
             free_mode=free_mode,
             auto_mode=auto_mode,
             prompt_extra=prompt_extra,
+            structured_output=structured_output,
+            temperature=temperature,
+            max_tokens=max_tokens,
         ),
         on_retry=on_retry,
         attempt_label="Повтор multi",
@@ -565,6 +604,9 @@ def chat_completion(
     free_mode: bool = False,
     auto_mode: bool = False,
     prompt_extra: str = "",
+    structured_output: bool = False,
+    temperature: float = 0.2,
+    max_tokens: int = CHAT_COMPLETION_MAX_TOKENS,
 ) -> str:
     """
     POST /v1/chat/completions с ретраями при таймаутах/502/503/429 и пустом ответе.
@@ -582,6 +624,9 @@ def chat_completion(
             free_mode=free_mode,
             auto_mode=auto_mode,
             prompt_extra=prompt_extra,
+            structured_output=structured_output,
+            temperature=temperature,
+            max_tokens=max_tokens,
         ),
         on_retry=on_retry,
         attempt_label="Повтор",
@@ -699,6 +744,53 @@ def list_models(
         if isinstance(m, dict) and m.get("id"):
             ids.append(str(m["id"]))
     return sorted(set(ids), key=str.lower)
+
+
+def benchmark_models(
+    api_base: str,
+    models: list[str],
+    *,
+    api_key: str | None = None,
+    limit: int = 8,
+    timeout: tuple[float, float] | None = None,
+    on_progress: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Lightweight vision probe benchmark for choosing an LM Studio model."""
+    from app.images import vision_test_card_data_uri
+
+    uri = vision_test_card_data_uri()
+    out: list[dict[str, Any]] = []
+    selected = [m for m in models if m][: max(1, limit)]
+    for model in selected:
+        t0 = time.monotonic()
+        ok = False
+        detail = ""
+        try:
+            text = vision_probe_completion(
+                uri,
+                api_base=api_base,
+                model=model,
+                api_key=api_key,
+                timeout=timeout or (API_PROBE_TIMEOUT_SEC, VISION_TEST_TIMEOUT_SEC),
+            )
+            low = text.lower()
+            ok = bool(text.strip()) and any(w in low for w in ("red", "green", "blue", "square", "circle", "triangle", "shape"))
+            detail = text[:180]
+        except Exception as e:
+            detail = str(e)[:180]
+        latency = max(0.001, time.monotonic() - t0)
+        score = (100.0 / latency if ok else 0.0) + (25.0 if ok and "shape" in detail.lower() else 0.0)
+        row = {
+            "model": model,
+            "ok": ok,
+            "latency_sec": round(latency, 3),
+            "score": round(score, 3),
+            "detail": detail,
+        }
+        out.append(row)
+        if on_progress:
+            on_progress(f"benchmark {model}: {'OK' if ok else 'FAIL'} {latency:.2f}s")
+    return sorted(out, key=lambda r: (-float(r["score"]), float(r["latency_sec"]), str(r["model"]).lower()))
 
 
 def vision_hint_from_model_dict(obj: dict[str, Any]) -> bool | None:

@@ -185,11 +185,15 @@ def _safe_hierarchical_tag(raw: str | None) -> str:
     return out[:128].strip("/")
 
 
-def _auto_segment(seg: str) -> str:
+def _auto_segment(seg: str, extra_aliases: dict[str, str] | None = None) -> str:
     seg = _FREE_SPACES_DASH_RE.sub("_", seg.strip().lower())
     seg = _FREE_UNDERSCORE_RE.sub("_", seg).strip("_")
     if not seg:
         return ""
+    if extra_aliases and seg in extra_aliases:
+        aliased = _safe_hierarchical_tag(extra_aliases[seg])
+        if aliased != UNCATEGORIZED:
+            return aliased.split("/")[0]
     if seg in _AUTO_SEGMENT_ALIASES:
         return _AUTO_SEGMENT_ALIASES[seg]
     if len(seg) > 4 and seg.endswith("ies"):
@@ -201,7 +205,7 @@ def _auto_segment(seg: str) -> str:
     return seg
 
 
-def _optimized_auto_tag(raw: str | None) -> str:
+def _optimized_auto_tag(raw: str | None, extra_aliases: dict[str, str] | None = None) -> str:
     """
     Auto categories are intentionally conservative: normalize synonyms, keep a
     stable root, and cap depth so large libraries do not explode into folders.
@@ -211,12 +215,21 @@ def _optimized_auto_tag(raw: str | None) -> str:
         return UNCATEGORIZED
     if safe in CATEGORY_WHITELIST:
         return _canonical_tag(safe)
+    if extra_aliases and safe in extra_aliases:
+        aliased = _safe_hierarchical_tag(extra_aliases[safe])
+        if aliased != UNCATEGORIZED:
+            return _optimized_auto_tag(aliased, None)
 
     raw_segments = [s for s in safe.split("/") if s]
     segments: list[str] = []
     for raw_seg in raw_segments:
-        seg = _auto_segment(raw_seg)
+        seg = _auto_segment(raw_seg, extra_aliases)
         if not seg or seg in _AUTO_WEAK_SEGMENTS:
+            continue
+        if "/" in seg:
+            for part in seg.split("/"):
+                if part and part not in segments and part not in _AUTO_WEAK_SEGMENTS:
+                    segments.append(part)
             continue
         if seg not in segments:
             segments.append(seg)
@@ -264,7 +277,7 @@ def normalize_tag_free(raw: str | None) -> str:
     return _safe_hierarchical_tag(raw)
 
 
-def normalize_tag_auto(raw: str | None) -> str:
+def normalize_tag_auto(raw: str | None, *, extra_aliases: dict[str, str] | None = None) -> str:
     """
     Auto mode: accept whitelist tags, otherwise choose the most frequent candidate
     from model output and normalize it as a safe hierarchical tag.
@@ -277,11 +290,11 @@ def normalize_tag_auto(raw: str | None) -> str:
     cleaned = _strip_thinking_sections(raw).lower()
     candidates: list[str] = []
     for chunk in _AUTO_SPLIT_RE.split(cleaned):
-        candidate = _optimized_auto_tag(chunk)
+        candidate = _optimized_auto_tag(chunk, extra_aliases)
         if candidate != UNCATEGORIZED:
             candidates.append(candidate)
     if not candidates:
-        return _optimized_auto_tag(cleaned)
+        return _optimized_auto_tag(cleaned, extra_aliases)
     counts: dict[str, int] = {}
     first_seen: dict[str, int] = {}
     for idx, tag in enumerate(candidates):

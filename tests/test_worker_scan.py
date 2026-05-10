@@ -207,3 +207,30 @@ def test_sort_worker_skips_existing_output_folder_inside_source(tmp_path: Path, 
     assert (dst / "vehicles_and_racing" / "a.jpg").exists()
     assert not (dst / "vehicles_and_racing" / "old.jpg").exists()
     db.close()
+
+
+def test_sort_worker_review_first_writes_manifest_without_copy(tmp_path: Path, monkeypatch: object) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    f = src / "a.jpg"
+    f.write_bytes(b"fake")
+
+    monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr(
+        "app.worker.chat_completion",
+        lambda *_a, **_k: '{"primary_category": "vehicles_and_racing", "confidence": 0.9}',
+    )
+
+    db = Database(tmp_path / "state.sqlite3")
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=1, review_first=True)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
+
+    manifests = list((dst / "_review_runs").glob("sort-*/manifest.jsonl"))
+    assert len(manifests) == 1
+    assert "vehicles_and_racing" in manifests[0].read_text(encoding="utf-8")
+    assert not (dst / "vehicles_and_racing" / "a.jpg").exists()
+    assert db.is_processed(file_sha256(f)) is False
+    db.close()
