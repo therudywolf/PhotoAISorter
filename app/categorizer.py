@@ -20,6 +20,99 @@ _FREE_SANITIZE_RE = re.compile(r"[^a-z0-9_/\-\s]+")
 _FREE_SPACES_DASH_RE = re.compile(r"[\s\-]+")
 _FREE_UNDERSCORE_RE = re.compile(r"_+")
 _AUTO_SPLIT_RE = re.compile(r"[\n,;|]+")
+_AUTO_WEAK_SEGMENTS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "content",
+        "file",
+        "general",
+        "image",
+        "images",
+        "media",
+        "misc",
+        "miscellaneous",
+        "other",
+        "photo",
+        "photos",
+        "picture",
+        "pictures",
+        "scene",
+        "tag",
+        "tags",
+        "the",
+        "unknown",
+    }
+)
+_AUTO_SEGMENT_ALIASES: dict[str, str] = {
+    "airplane": "aviation",
+    "airplanes": "aviation",
+    "aircraft": "aviation",
+    "anime": "illustration",
+    "auto": "vehicles",
+    "automobile": "vehicles",
+    "automobiles": "vehicles",
+    "bike": "vehicles",
+    "bikes": "vehicles",
+    "car": "vehicles",
+    "cars": "vehicles",
+    "chat": "messaging",
+    "cityscape": "city",
+    "dog": "animals",
+    "dogs": "animals",
+    "drawing": "illustration",
+    "drawings": "illustration",
+    "foodie": "food",
+    "funny": "memes",
+    "meme": "memes",
+    "motorbike": "vehicles",
+    "motorbikes": "vehicles",
+    "motorcycle": "vehicles",
+    "motorcycles": "vehicles",
+    "motorsport": "vehicles",
+    "motorsports": "vehicles",
+    "people": "humans",
+    "person": "humans",
+    "racing": "vehicles",
+    "screen": "screenshots",
+    "screen_capture": "screenshots",
+    "screencap": "screenshots",
+    "screencaps": "screenshots",
+    "screenshot": "screenshots",
+    "screens": "screenshots",
+    "screenshots": "screenshots",
+    "selfie": "humans",
+    "text": "documents",
+    "ui": "screenshots",
+    "vehicle": "vehicles",
+    "vehicles": "vehicles",
+}
+_AUTO_ROOTS: frozenset[str] = frozenset(
+    {
+        "animals",
+        "architecture",
+        "art",
+        "aviation",
+        "city",
+        "documents",
+        "food",
+        "humans",
+        "illustration",
+        "landscape",
+        "memes",
+        "messaging",
+        "nature",
+        "objects",
+        "screenshots",
+        "travel",
+        "vehicles",
+    }
+)
+_AUTO_COLLAPSE_TO_PRESET: dict[str, str] = {
+    "memes": "memes_and_screenshots",
+    "screenshots": "memes_and_screenshots",
+}
 
 
 def _strip_thinking_sections(text: str) -> str:
@@ -92,6 +185,74 @@ def _safe_hierarchical_tag(raw: str | None) -> str:
     return out[:128].strip("/")
 
 
+def _auto_segment(seg: str) -> str:
+    seg = _FREE_SPACES_DASH_RE.sub("_", seg.strip().lower())
+    seg = _FREE_UNDERSCORE_RE.sub("_", seg).strip("_")
+    if not seg:
+        return ""
+    if seg in _AUTO_SEGMENT_ALIASES:
+        return _AUTO_SEGMENT_ALIASES[seg]
+    if len(seg) > 4 and seg.endswith("ies"):
+        singular = seg[:-3] + "y"
+        return _AUTO_SEGMENT_ALIASES.get(singular, singular)
+    if len(seg) > 3 and seg.endswith("s") and not seg.endswith("ss"):
+        singular = seg[:-1]
+        return _AUTO_SEGMENT_ALIASES.get(singular, singular)
+    return seg
+
+
+def _optimized_auto_tag(raw: str | None) -> str:
+    """
+    Auto categories are intentionally conservative: normalize synonyms, keep a
+    stable root, and cap depth so large libraries do not explode into folders.
+    """
+    safe = _safe_hierarchical_tag(raw)
+    if safe == UNCATEGORIZED:
+        return UNCATEGORIZED
+    if safe in CATEGORY_WHITELIST:
+        return _canonical_tag(safe)
+
+    raw_segments = [s for s in safe.split("/") if s]
+    segments: list[str] = []
+    for raw_seg in raw_segments:
+        seg = _auto_segment(raw_seg)
+        if not seg or seg in _AUTO_WEAK_SEGMENTS:
+            continue
+        if seg not in segments:
+            segments.append(seg)
+    if not segments:
+        return UNCATEGORIZED
+
+    root_idx = next((i for i, s in enumerate(segments) if s in _AUTO_ROOTS), None)
+    if root_idx is None:
+        root = segments[0]
+        details = segments[1:]
+    else:
+        root = segments[root_idx]
+        details = segments[:root_idx] + segments[root_idx + 1 :]
+
+    if root in _AUTO_COLLAPSE_TO_PRESET and not details:
+        return _AUTO_COLLAPSE_TO_PRESET[root]
+    if root == "vehicles":
+        vehicle_details = [d for d in details if d not in {"vehicles", "racing", "motorsport"}]
+        if not vehicle_details:
+            return "vehicles_and_racing"
+        details = vehicle_details
+
+    compact = [root]
+    for detail in details:
+        if detail == root or detail in _AUTO_WEAK_SEGMENTS:
+            continue
+        compact.append(detail)
+        if len(compact) >= 2:
+            break
+
+    out = "/".join(compact)
+    if out in CATEGORY_WHITELIST:
+        return _canonical_tag(out)
+    return out[:96].strip("/") or UNCATEGORIZED
+
+
 def normalize_tag_free(raw: str | None) -> str:
     """
     Free mode: keep whitelist tags as-is, otherwise return a safe hierarchical tag.
@@ -116,15 +277,17 @@ def normalize_tag_auto(raw: str | None) -> str:
     cleaned = _strip_thinking_sections(raw).lower()
     candidates: list[str] = []
     for chunk in _AUTO_SPLIT_RE.split(cleaned):
-        candidate = _safe_hierarchical_tag(chunk)
+        candidate = _optimized_auto_tag(chunk)
         if candidate != UNCATEGORIZED:
             candidates.append(candidate)
     if not candidates:
-        return _safe_hierarchical_tag(cleaned)
+        return _optimized_auto_tag(cleaned)
     counts: dict[str, int] = {}
-    for tag in candidates:
+    first_seen: dict[str, int] = {}
+    for idx, tag in enumerate(candidates):
         counts[tag] = counts.get(tag, 0) + 1
-    return sorted(counts, key=lambda k: (-counts[k], len(k), k))[0]
+        first_seen.setdefault(tag, idx)
+    return sorted(counts, key=lambda k: (-counts[k], first_seen[k], len(k), k))[0]
 
 
 def merge_tags_by_priority(tags: list[str]) -> str:

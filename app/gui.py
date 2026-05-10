@@ -52,6 +52,14 @@ def _format_tag_list_for_display(categories: tuple[str, ...]) -> str:
     return "\n".join(categories)
 
 
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 class App(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
@@ -652,12 +660,19 @@ class App(ctk.CTk):
         if not in_path.is_dir():
             self._append_log("Ошибка: укажите существующую папку для сканирования.")
             return
+        if in_path.resolve() == out_path.resolve():
+            self._append_log("Ошибка: папка результата не должна совпадать с папкой сканирования.")
+            return
         if not out_path.exists():
             try:
                 out_path.mkdir(parents=True, exist_ok=True)
             except OSError as e:
                 self._append_log(f"Ошибка папки назначения: {e}")
                 return
+        if _path_is_relative_to(out_path, in_path):
+            self._append_log(
+                "Внимание: папка результата находится внутри источника; уже лежащие там файлы будут исключены из скана."
+            )
 
         user_context = self._context.get("1.0", "end").strip()
         api_base = self._api_var.get().strip() or DEFAULT_API_BASE
@@ -809,5 +824,4 @@ def main() -> None:
     app = App()
     app.protocol("WM_DELETE_WINDOW", app.on_close)
     app.mainloop()
-
 

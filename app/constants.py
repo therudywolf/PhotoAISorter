@@ -203,7 +203,7 @@ VIDEO_FRAGMENT_DECODE_SEC = 0.15
 FFMPEG_FRAME_TIMEOUT_SEC = 45.0
 
 # Версия пайплайна (категории / кадры / промпт): смена → переобработка в БД
-PIPELINE_VERSION = "2026-04-09-categories-v2"
+PIPELINE_VERSION = "2026-05-10-categories-v3"
 
 # Запас свободного места при копировании (байт)
 COPY_FREE_MARGIN_BYTES = 64 * 1024 * 1024

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import imagehash
 from PIL import Image
 
 from app.duplicate_finder import (
@@ -163,3 +164,38 @@ def test_build_groups_no_false_positive_different_images(tmp_path: Path) -> None
     opts = DuplicateFinderOptions(include_exact=False, include_perceptual=True, phash_max_hamming=4)
     groups = build_groups_from_records([ra, rb], opts)
     assert groups == []
+
+
+def test_perceptual_grouping_uses_hamming_radius(tmp_path: Path) -> None:
+    a = tmp_path / "a.png"
+    b = tmp_path / "b.png"
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    ph_a = imagehash.hex_to_hash("0000000000000000")
+    ph_b = imagehash.hex_to_hash("0000000000000001")
+
+    ra = FileDupInfo(
+        path=a,
+        path_norm=str(a.resolve()),
+        size_bytes=1,
+        mtime_ns=1,
+        width=80,
+        height=60,
+        sha256="x",
+        phash=ph_a,
+        dhash=ph_a,
+    )
+    rb = FileDupInfo(
+        path=b,
+        path_norm=str(b.resolve()),
+        size_bytes=1,
+        mtime_ns=1,
+        width=80,
+        height=60,
+        sha256="y",
+        phash=ph_b,
+        dhash=ph_b,
+    )
+    opts = DuplicateFinderOptions(include_exact=False, include_perceptual=True, phash_max_hamming=1, dhash_max_hamming=1)
+    groups = build_groups_from_records([ra, rb], opts)
+    assert len(groups) == 1

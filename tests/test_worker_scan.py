@@ -5,6 +5,7 @@ from queue import Queue
 
 from app.constants import MediaScanMode
 from app.db import Database
+from app.images import file_sha256
 from app.worker import SortWorker, iter_media_files
 
 
@@ -94,7 +95,7 @@ def test_sort_worker_auto_mode_chooses_popular_candidate(tmp_path: Path, monkeyp
     w = SortWorker(db, q, api_base="http://x", model="m", workers=1, auto_tag_mode=True)
     w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
 
-    assert (dst / "nature" / "forest" / "sunset" / "a.jpg").exists()
+    assert (dst / "nature" / "forest" / "a.jpg").exists()
     db.close()
 
 
@@ -153,4 +154,56 @@ def test_sort_worker_retries_api_error_then_succeeds(tmp_path: Path, monkeypatch
 
     assert attempts["n"] == 3
     assert (dst / "vehicles_and_racing" / "a.jpg").exists()
+    db.close()
+
+
+def test_sort_worker_no_space_leaves_file_pending(tmp_path: Path, monkeypatch: object) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    f = src / "a.jpg"
+    f.write_bytes(b"fake")
+
+    monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr("app.worker.chat_completion", lambda *_a, **_k: "vehicles_and_racing")
+    monkeypatch.setattr("app.worker.has_disk_space_for_copy", lambda *_a, **_k: False)
+
+    db = Database(tmp_path / "state.sqlite3")
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=1)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
+
+    assert not (dst / "vehicles_and_racing" / "a.jpg").exists()
+    assert db.count_records() == 1
+    assert db.is_processed(file_sha256(f)) is False
+    db.close()
+
+
+def test_sort_worker_skips_existing_output_folder_inside_source(tmp_path: Path, monkeypatch: object) -> None:
+    src = tmp_path / "src"
+    dst = src / "sorted"
+    dst.mkdir(parents=True)
+    keep = src / "a.jpg"
+    old_output = dst / "old.jpg"
+    keep.write_bytes(b"fake-a")
+    old_output.write_bytes(b"fake-old")
+
+    attempts = {"n": 0}
+
+    def fake_chat(*_a: object, **_k: object) -> str:
+        attempts["n"] += 1
+        return "vehicles_and_racing"
+
+    monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+
+    db = Database(tmp_path / "state.sqlite3")
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=1)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
+
+    assert attempts["n"] == 1
+    assert (dst / "vehicles_and_racing" / "a.jpg").exists()
+    assert not (dst / "vehicles_and_racing" / "old.jpg").exists()
     db.close()

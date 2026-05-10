@@ -61,6 +61,14 @@ def iter_image_files(root: Path) -> list[Path]:
     return iter_media_files(root, MediaScanMode.PHOTOS_ONLY)
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _disk_usage_root(path: Path) -> Path:
     p = path.resolve()
     cur = p
@@ -176,12 +184,26 @@ class SortWorker:
     ) -> None:
         finish_reason = "completed"
         started_ts = time.monotonic()
-        metrics = {"cache_skip": 0, "api_errors": 0, "copied": 0}
+        metrics = {"cache_skip": 0, "api_errors": 0, "copied": 0, "copy_errors": 0, "no_space": 0}
         try:
             self._emit({"type": "state_changed", "state": TaskState.RUNNING.value})
             source_dir = source_dir.resolve()
             dest_dir = dest_dir.resolve()
             files = iter_media_files(source_dir, media_mode)
+            if source_dir != dest_dir and _is_relative_to(dest_dir, source_dir):
+                before = len(files)
+                files = [p for p in files if not _is_relative_to(p, dest_dir)]
+                skipped_outputs = before - len(files)
+                if skipped_outputs > 0:
+                    self._emit(
+                        {
+                            "type": "log",
+                            "text": (
+                                f"Папка результата внутри источника: пропущено уже лежащих "
+                                f"в результате файлов: {skipped_outputs}."
+                            ),
+                        }
+                    )
             total = len(files)
             self._emit({"type": "scan_done", "total": total})
 
@@ -220,7 +242,16 @@ class SortWorker:
                 with storm_lock:
                     wait_for = max(0.0, storm_guard_until - time.monotonic())
                 if wait_for > 0:
-                    time.sleep(wait_for)
+                    _sleep_or_stopped(wait_for)
+
+            def _sleep_or_stopped(seconds: float) -> bool:
+                until = time.monotonic() + max(0.0, seconds)
+                while not self._stop.is_set():
+                    remaining = until - time.monotonic()
+                    if remaining <= 0:
+                        return True
+                    time.sleep(min(0.1, remaining))
+                return False
 
             def complete_task(elapsed_sec: float) -> None:
                 nonlocal done
@@ -347,7 +378,8 @@ class SortWorker:
                                 ),
                             }
                         )
-                        time.sleep(0.2 * attempt)
+                        if not _sleep_or_stopped(0.2 * attempt):
+                            break
 
                 if self._stop.is_set():
                     complete_task(time.monotonic() - t0)
@@ -356,13 +388,16 @@ class SortWorker:
                 tag_dir = dest_dir / category
                 try:
                     if not has_disk_space_for_copy(dest_dir, path):
+                        metrics["no_space"] += 1
                         self._emit(
                             {
                                 "type": "log",
-                                "text": f"Мало места на диске (пропуск копирования): {path.name}",
+                                "text": (
+                                    f"Мало места на диске: {path.name} не скопирован. "
+                                    "Файл оставлен pending и будет повторён в следующем запуске."
+                                ),
                             }
                         )
-                        self.db.mark_processed(digest, UNCATEGORIZED, PIPELINE_VERSION)
                     else:
                         with self._io_lock:
                             dest_file = unique_dest_path(tag_dir, path.name)
@@ -371,11 +406,16 @@ class SortWorker:
                         metrics["copied"] += 1
                         self._emit({"type": "log", "text": f"{path.name} -> {category}"})
                 except OSError as e:
-                    self._emit({"type": "log", "text": f"copy error {path}: {e!s}"})
-                    try:
-                        self.db.mark_processed(digest, UNCATEGORIZED, PIPELINE_VERSION)
-                    except Exception:
-                        pass
+                    metrics["copy_errors"] += 1
+                    self._emit(
+                        {
+                            "type": "log",
+                            "text": (
+                                f"copy error {path}: {e!s}. "
+                                "Файл оставлен pending и будет повторён в следующем запуске."
+                            ),
+                        }
+                    )
 
                 complete_task(time.monotonic() - t0)
 
@@ -383,7 +423,8 @@ class SortWorker:
                 return
 
             workers = max(1, min(self.workers, len(files)))
-            with ThreadPoolExecutor(max_workers=workers) as executor:
+            executor = ThreadPoolExecutor(max_workers=workers)
+            try:
                 futures = [executor.submit(process_one, p) for p in files]
                 try:
                     for fut in as_completed(futures):
@@ -397,6 +438,10 @@ class SortWorker:
                 finally:
                     if self._stop.is_set():
                         finish_reason = "stopped"
+                        for fut in futures:
+                            fut.cancel()
+            finally:
+                executor.shutdown(wait=True, cancel_futures=self._stop.is_set())
 
         except Exception as e:
             self._emit({"type": "log", "text": f"fatal: {e!s}"})
@@ -413,6 +458,8 @@ class SortWorker:
                         "cache_skip": metrics["cache_skip"],
                         "api_errors": metrics["api_errors"],
                         "copied": metrics["copied"],
+                        "copy_errors": metrics["copy_errors"],
+                        "no_space": metrics["no_space"],
                     },
                 }
             )
@@ -445,7 +492,5 @@ class SortWorker:
 
         self._thread = threading.Thread(target=target, daemon=True)
         self._thread.start()
-
-
 
 

@@ -188,6 +188,53 @@ class UnionFind:
             self.r[ra] += 1
 
 
+class _BKNode:
+    def __init__(self, key: int, index: int) -> None:
+        self.key = key
+        self.indices = [index]
+        self.children: dict[int, _BKNode] = {}
+
+
+class _BKTree:
+    """Small BK-tree for 64-bit perceptual hashes."""
+
+    def __init__(self) -> None:
+        self.root: _BKNode | None = None
+
+    def insert(self, key: int, index: int) -> None:
+        if self.root is None:
+            self.root = _BKNode(key, index)
+            return
+        node = self.root
+        while True:
+            dist = (key ^ node.key).bit_count()
+            if dist == 0:
+                node.indices.append(index)
+                return
+            child = node.children.get(dist)
+            if child is None:
+                node.children[dist] = _BKNode(key, index)
+                return
+            node = child
+
+    def query(self, key: int, max_dist: int) -> list[int]:
+        if self.root is None:
+            return []
+        out: list[int] = []
+        stack = [self.root]
+        while stack:
+            node = stack.pop()
+            dist = (key ^ node.key).bit_count()
+            if dist <= max_dist:
+                out.extend(node.indices)
+            lo = dist - max_dist
+            hi = dist + max_dist
+            for edge_dist, child in node.children.items():
+                if lo <= edge_dist <= hi:
+                    stack.append(child)
+        return out
+
+
 def _norm(path: Path) -> str:
     try:
         return str(path.resolve())
@@ -279,6 +326,42 @@ def _hamming(a: imagehash.ImageHash | None, b: imagehash.ImageHash | None) -> in
     return int(a - b)
 
 
+def _phash_int(h: imagehash.ImageHash | None) -> int | None:
+    if h is None:
+        return None
+    try:
+        return int(str(h), 16)
+    except ValueError:
+        return None
+
+
+def _size_bucket_key(r: FileDupInfo, options: DuplicateFinderOptions) -> tuple[int, int]:
+    if options.meta_require_same_dimensions:
+        return (r.width or -1, r.height or -1)
+    return ((r.width or -1) // 32, (r.height or -1) // 32)
+
+
+def _has_multiframe_signature(r: FileDupInfo) -> bool:
+    return bool(r.phash_frames and len(r.phash_frames) >= 2)
+
+
+def _phash_candidate_pairs(
+    idxs: list[int],
+    records: list[FileDupInfo],
+    max_dist: int,
+) -> list[tuple[int, int]]:
+    tree = _BKTree()
+    out: list[tuple[int, int]] = []
+    for idx in idxs:
+        key = _phash_int(records[idx].phash)
+        if key is None:
+            continue
+        for prev in tree.query(key, max_dist):
+            out.append((prev, idx))
+        tree.insert(key, idx)
+    return out
+
+
 def _path_needs_multiframe_phash(path: Path) -> bool:
     suf = path.suffix.lower()
     if suf in VIDEO_EXTENSIONS:
@@ -366,27 +449,21 @@ def collect_llm_verification_pairs(
     for i, r in enumerate(records):
         if r.phash is None:
             continue
-        if options.meta_require_same_dimensions:
-            key = (r.width or -1, r.height or -1)
-        else:
-            key = ((r.width or -1) // 32, (r.height or -1) // 32)
+        key = _size_bucket_key(r, options)
         buckets[key].append(i)
     for key in sorted(buckets.keys()):
         idxs = buckets[key]
-        m = len(idxs)
-        for a in range(m):
-            for b in range(a + 1, m):
-                ia, ib = idxs[a], idxs[b]
-                ai, bi = records[ia], records[ib]
-                if not _likely_candidate(ai, bi):
-                    continue
-                if ai.sha256 and bi.sha256 and ai.sha256 == bi.sha256:
-                    continue
-                h = int(ai.phash - bi.phash)
-                if options.llm_hamming_min <= h <= options.llm_hamming_max:
-                    pairs.append((ai, bi))
-                    if len(pairs) >= max_pairs:
-                        return pairs
+        for ia, ib in _phash_candidate_pairs(idxs, records, options.llm_hamming_max):
+            ai, bi = records[ia], records[ib]
+            if not _likely_candidate(ai, bi):
+                continue
+            if ai.sha256 and bi.sha256 and ai.sha256 == bi.sha256:
+                continue
+            h = int(ai.phash - bi.phash)
+            if options.llm_hamming_min <= h <= options.llm_hamming_max:
+                pairs.append((ai, bi))
+                if len(pairs) >= max_pairs:
+                    return pairs
     return pairs
 
 
@@ -524,22 +601,33 @@ def build_groups_from_records(
         for i, r in enumerate(records):
             if r.phash is None:
                 continue
-            if options.meta_require_same_dimensions:
-                key = (r.width or -1, r.height or -1)
-            else:
-                key = ((r.width or -1) // 32, (r.height or -1) // 32)
+            key = _size_bucket_key(r, options)
             buckets[key].append(i)
         max_bucket = max((len(v) for v in buckets.values()), default=0)
         if on_log and max_bucket > 6000:
             on_log(
                 f"Группировка pHash: самая большая корзина размеров — {max_bucket} файлов; "
-                "сравнение пар внутри неё может занять много времени."
+                "поиск похожих фото идёт через индекс pHash; видео сравнивается осторожнее по кадрам."
             )
         for idxs in buckets.values():
-            m = len(idxs)
-            for a in range(m):
-                for b in range(a + 1, m):
-                    ia, ib = idxs[a], idxs[b]
+            indexed = [i for i in idxs if not _has_multiframe_signature(records[i])]
+            multiframe = [i for i in idxs if _has_multiframe_signature(records[i])]
+            seen_pairs: set[tuple[int, int]] = set()
+
+            for ia, ib in _phash_candidate_pairs(indexed, records, options.phash_max_hamming):
+                pair = (ia, ib) if ia < ib else (ib, ia)
+                seen_pairs.add(pair)
+                if _perceptual_match_records(records[ia], records[ib], options):
+                    uf.union(ia, ib)
+
+            for ia in multiframe:
+                for ib in idxs:
+                    if ia == ib:
+                        continue
+                    pair = (ia, ib) if ia < ib else (ib, ia)
+                    if pair in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
                     if _perceptual_match_records(records[ia], records[ib], options):
                         uf.union(ia, ib)
 

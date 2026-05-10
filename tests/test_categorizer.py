@@ -53,4 +53,24 @@ def test_normalize_tag_auto_keeps_known_whitelist_tag() -> None:
 
 def test_normalize_tag_auto_picks_most_frequent_candidate() -> None:
     raw = "nature/forest/sunset, city/night, nature/forest/sunset"
-    assert normalize_tag_auto(raw) == "nature/forest/sunset"
+    assert normalize_tag_auto(raw) == "nature/forest"
+
+
+def test_normalize_tag_auto_collapses_vehicle_synonyms() -> None:
+    raw = "car, cars, vehicle, auto"
+    assert normalize_tag_auto(raw) == "vehicles_and_racing"
+
+
+def test_normalize_tag_auto_keeps_stable_vehicle_detail() -> None:
+    raw = "bmw/car, auto/bmw, vehicles/bmw"
+    assert normalize_tag_auto(raw) == "vehicles/bmw"
+
+
+def test_normalize_tag_auto_drops_weak_segments_and_caps_depth() -> None:
+    raw = "photo/nature/forest/sunset/evening"
+    assert normalize_tag_auto(raw) == "nature/forest"
+
+
+def test_normalize_tag_auto_tie_keeps_model_order() -> None:
+    raw = "city/night, nature/forest"
+    assert normalize_tag_auto(raw) == "city/night"

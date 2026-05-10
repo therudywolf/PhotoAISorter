@@ -67,8 +67,11 @@ def build_classification_system_prompt(
     if auto_mode:
         header = (
             "You are a local backend automated tagging script. First prefer known tags below. "
-            "If none fit, propose short lowercase extra tags. Output one line with candidate tags separated by commas "
-            "(most probable first). Example: nature/forest/sunset, evening/sky."
+            "If none fit, propose stable short lowercase categories. Use broad roots such as "
+            "vehicles, humans, animals, nature, landscape, screenshots, memes, documents, art, "
+            "illustration, food, travel, architecture, city, objects. Avoid near-duplicate words "
+            "and overly specific one-off folders. Output one line with candidate tags separated by commas "
+            "(most probable first). Example: vehicles/bmw, nature/forest, screenshots/chat."
         )
     elif free_mode:
         header = (
