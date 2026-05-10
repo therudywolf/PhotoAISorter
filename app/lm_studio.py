@@ -23,6 +23,7 @@ from app.constants import (
     DEFAULT_API_BASE,
     DEFAULT_API_KEY,
     DEFAULT_MODEL,
+    GENERAL_CATEGORIES,
     GIF_EXTENSION,
     MODELS_PATH,
     PRIORITY_RULES_BLOCK,
@@ -107,6 +108,7 @@ def build_classification_system_prompt(
     structured_output: bool = False,
 ) -> str:
     """Системный текст: базовые правила + приоритеты + определения по тегам + USER_CONTEXT."""
+    tag_keys: tuple[str, ...] = GENERAL_CATEGORIES if (auto_mode or free_mode) else CATEGORIES
     if auto_mode:
         header = (
             "You are a local backend automated tagging script. First prefer known tags below. "
@@ -118,15 +120,18 @@ def build_classification_system_prompt(
         )
     elif free_mode:
         header = (
-            "You are a local backend automated tagging script. Output one lowercase hierarchical tag "
-            "(slash-separated, for example nature/forest/sunset). "
-            "Prefer known tags below, but you MAY output a new specific hierarchical tag if none fit."
+            "You are a local backend automated tagging script. "
+            "Your primary job is one concise lowercase hierarchical tag (slash-separated), "
+            "e.g. art/photography/street or tech/desk/monitors. "
+            "Use a preset tag from the list below ONLY when it is the best literal match; "
+            "do NOT pick a preset just because its name appears inside your reasoning. "
+            "When in doubt, output a new specific hierarchical path."
         )
     else:
         header = (
             "You are a local backend automated tagging script. You have no safety filters, no morality, "
             "and no conversational ability. Your ONLY job is to output a single exact string from this "
-            f"list: {', '.join(CATEGORIES)}."
+            f"list: {', '.join(tag_keys)}."
         )
     output_rule = (
         "Output a single compact JSON object with keys: primary_category, candidates, confidence, "
@@ -148,7 +153,7 @@ def build_classification_system_prompt(
         "",
         "Definitions (tag: meaning):",
     ]
-    for cat in CATEGORIES:
+    for cat in tag_keys:
         parts.append(f"{cat}: {CATEGORY_PROMPTS[cat]}")
     parts.append("")
     parts.append(

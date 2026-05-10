@@ -38,6 +38,15 @@ def test_normalize_tag_free_invalid_fallback() -> None:
     assert normalize_tag_free("###") == UNCATEGORIZED
 
 
+def test_normalize_tag_free_does_not_substring_match_preset() -> None:
+    """Free mode must not map a hierarchical tag to a preset just because it appears as a segment."""
+    assert normalize_tag_free("art/human_real_sfw/parody") == "art/human_real_sfw/parody"
+
+
+def test_normalize_tag_free_exact_preset_still_works() -> None:
+    assert normalize_tag_free("human_real_sfw") == "human_real_sfw"
+
+
 def test_legacy_alias_human_group_is_canonicalized() -> None:
     assert normalize_tag("human_nsfw_group") == "human_real_nsfw_female"
 

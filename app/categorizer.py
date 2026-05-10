@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import re
 
-from app.constants import CATEGORY_WHITELIST, TAG_MERGE_PRIORITY, UNCATEGORIZED
+from app.constants import (
+    FURRY_CATEGORY_WHITELIST,
+    GENERAL_CATEGORY_WHITELIST,
+    TAG_MERGE_PRIORITY,
+    UNCATEGORIZED,
+)
 
 _TAG_PRIORITY_INDEX = {tag: i for i, tag in enumerate(TAG_MERGE_PRIORITY)}
-_WHITELIST_BY_LEN_DESC: tuple[str, ...] = tuple(sorted(CATEGORY_WHITELIST, key=len, reverse=True))
+_WHITELIST_BY_LEN_FURRY: tuple[str, ...] = tuple(sorted(FURRY_CATEGORY_WHITELIST, key=len, reverse=True))
+_WHITELIST_BY_LEN_GENERAL: tuple[str, ...] = tuple(sorted(GENERAL_CATEGORY_WHITELIST, key=len, reverse=True))
 _LEGACY_TAG_ALIASES: dict[str, str] = {
     "cars_and_bmw": "vehicles_and_racing",
     "human_sfw": "human_real_sfw",
@@ -131,7 +137,16 @@ def _canonical_tag(tag: str) -> str:
     return _LEGACY_TAG_ALIASES.get(tag, tag)
 
 
-def normalize_tag(raw: str | None) -> str:
+def _whitelist_by_len_desc(whitelist: frozenset[str]) -> tuple[str, ...]:
+    if whitelist is FURRY_CATEGORY_WHITELIST:
+        return _WHITELIST_BY_LEN_FURRY
+    if whitelist is GENERAL_CATEGORY_WHITELIST:
+        return _WHITELIST_BY_LEN_GENERAL
+    return tuple(sorted(whitelist, key=len, reverse=True))
+
+
+def normalize_tag_exact(raw: str | None, *, whitelist: frozenset[str]) -> str:
+    """Match only exact tag lines (no substring search). Used by free-tag mode."""
     if not raw:
         return UNCATEGORIZED
     raw_clean = _strip_thinking_sections(raw)
@@ -139,23 +154,43 @@ def normalize_tag(raw: str | None) -> str:
     tag = raw_source.strip().lower()
     if tag.startswith("`") and tag.endswith("`"):
         tag = tag[1:-1].strip()
-    if tag in CATEGORY_WHITELIST:
+    if tag in whitelist:
         return _canonical_tag(tag)
     lines = [ln.strip().lower() for ln in raw_source.splitlines() if ln.strip()]
     if lines:
-        if lines[0] in CATEGORY_WHITELIST:
+        if lines[0] in whitelist:
             return _canonical_tag(lines[0])
-        if lines[-1] in CATEGORY_WHITELIST:
+        if lines[-1] in whitelist:
+            return _canonical_tag(lines[-1])
+    return UNCATEGORIZED
+
+
+def normalize_tag(raw: str | None, *, whitelist: frozenset[str] | None = None) -> str:
+    if not raw:
+        return UNCATEGORIZED
+    wl = FURRY_CATEGORY_WHITELIST if whitelist is None else whitelist
+    raw_clean = _strip_thinking_sections(raw)
+    raw_source = raw_clean or raw
+    tag = raw_source.strip().lower()
+    if tag.startswith("`") and tag.endswith("`"):
+        tag = tag[1:-1].strip()
+    if tag in wl:
+        return _canonical_tag(tag)
+    lines = [ln.strip().lower() for ln in raw_source.splitlines() if ln.strip()]
+    if lines:
+        if lines[0] in wl:
+            return _canonical_tag(lines[0])
+        if lines[-1] in wl:
             return _canonical_tag(lines[-1])
     # Reasoning-модели: тег может быть где угодно в длинном тексте (ищем самые длинные совпадения первыми)
     blob = raw_source.lower()
-    for cat in _WHITELIST_BY_LEN_DESC:
+    for cat in _whitelist_by_len_desc(wl):
         if cat in blob:
             return _canonical_tag(cat)
     return UNCATEGORIZED
 
 
-def _safe_hierarchical_tag(raw: str | None) -> str:
+def _safe_hierarchical_tag(raw: str | None, *, whitelist: frozenset[str] | None = None) -> str:
     if not raw:
         return UNCATEGORIZED
     txt = _strip_thinking_sections(raw).strip().lower()
@@ -180,7 +215,8 @@ def _safe_hierarchical_tag(raw: str | None) -> str:
     out = "/".join(segments)
     if not out:
         return UNCATEGORIZED
-    if out in CATEGORY_WHITELIST:
+    wl = whitelist if whitelist is not None else GENERAL_CATEGORY_WHITELIST
+    if out in wl:
         return _canonical_tag(out)
     return out[:128].strip("/")
 
@@ -205,15 +241,21 @@ def _auto_segment(seg: str, extra_aliases: dict[str, str] | None = None) -> str:
     return seg
 
 
-def _optimized_auto_tag(raw: str | None, extra_aliases: dict[str, str] | None = None) -> str:
+def _optimized_auto_tag(
+    raw: str | None,
+    extra_aliases: dict[str, str] | None = None,
+    *,
+    whitelist: frozenset[str] | None = None,
+) -> str:
     """
     Auto categories are intentionally conservative: normalize synonyms, keep a
     stable root, and cap depth so large libraries do not explode into folders.
     """
-    safe = _safe_hierarchical_tag(raw)
+    wl = whitelist if whitelist is not None else GENERAL_CATEGORY_WHITELIST
+    safe = _safe_hierarchical_tag(raw, whitelist=wl)
     if safe == UNCATEGORIZED:
         return UNCATEGORIZED
-    if safe in CATEGORY_WHITELIST:
+    if safe in wl:
         return _canonical_tag(safe)
     if extra_aliases and safe in extra_aliases:
         aliased = _safe_hierarchical_tag(extra_aliases[safe])
@@ -261,28 +303,39 @@ def _optimized_auto_tag(raw: str | None, extra_aliases: dict[str, str] | None = 
             break
 
     out = "/".join(compact)
-    if out in CATEGORY_WHITELIST:
+    if out in wl:
         return _canonical_tag(out)
     return out[:96].strip("/") or UNCATEGORIZED
 
 
-def normalize_tag_free(raw: str | None) -> str:
+def normalize_tag_free(
+    raw: str | None,
+    *,
+    exact_whitelist: frozenset[str] | None = None,
+) -> str:
     """
-    Free mode: keep whitelist tags as-is, otherwise return a safe hierarchical tag.
+    Free mode: map to whitelist only on exact tag lines (not substring), else hierarchical tag.
     Format example: nature/forest/sunset
     """
-    base = normalize_tag(raw)
+    wl = exact_whitelist if exact_whitelist is not None else GENERAL_CATEGORY_WHITELIST
+    base = normalize_tag_exact(raw, whitelist=wl)
     if raw and base != UNCATEGORIZED:
         return base
-    return _safe_hierarchical_tag(raw)
+    return _safe_hierarchical_tag(raw, whitelist=wl)
 
 
-def normalize_tag_auto(raw: str | None, *, extra_aliases: dict[str, str] | None = None) -> str:
+def normalize_tag_auto(
+    raw: str | None,
+    *,
+    extra_aliases: dict[str, str] | None = None,
+    substring_whitelist: frozenset[str] | None = None,
+) -> str:
     """
     Auto mode: accept whitelist tags, otherwise choose the most frequent candidate
     from model output and normalize it as a safe hierarchical tag.
     """
-    base = normalize_tag(raw)
+    swl = substring_whitelist if substring_whitelist is not None else GENERAL_CATEGORY_WHITELIST
+    base = normalize_tag(raw, whitelist=swl)
     if raw and base != UNCATEGORIZED:
         return base
     if not raw:
@@ -290,11 +343,11 @@ def normalize_tag_auto(raw: str | None, *, extra_aliases: dict[str, str] | None 
     cleaned = _strip_thinking_sections(raw).lower()
     candidates: list[str] = []
     for chunk in _AUTO_SPLIT_RE.split(cleaned):
-        candidate = _optimized_auto_tag(chunk, extra_aliases)
+        candidate = _optimized_auto_tag(chunk, extra_aliases, whitelist=swl)
         if candidate != UNCATEGORIZED:
             candidates.append(candidate)
     if not candidates:
-        return _optimized_auto_tag(cleaned, extra_aliases)
+        return _optimized_auto_tag(cleaned, extra_aliases, whitelist=swl)
     counts: dict[str, int] = {}
     first_seen: dict[str, int] = {}
     for idx, tag in enumerate(candidates):
@@ -303,14 +356,19 @@ def normalize_tag_auto(raw: str | None, *, extra_aliases: dict[str, str] | None 
     return sorted(counts, key=lambda k: (-counts[k], first_seen[k], len(k), k))[0]
 
 
-def merge_tags_by_priority(tags: list[str]) -> str:
+def merge_tags_by_priority(
+    tags: list[str],
+    *,
+    whitelist: frozenset[str] | None = None,
+) -> str:
     """При конфликте тегов с разных кадров выбрать один по TAG_MERGE_PRIORITY (меньший индекс = важнее)."""
     if not tags:
         return UNCATEGORIZED
+    wl = FURRY_CATEGORY_WHITELIST if whitelist is None else whitelist
     best = UNCATEGORIZED
     best_rank = len(TAG_MERGE_PRIORITY) + 1
     for raw in tags:
-        norm = normalize_tag(raw)
+        norm = normalize_tag(raw, whitelist=wl)
         rank = _TAG_PRIORITY_INDEX.get(norm, len(TAG_MERGE_PRIORITY))
         if rank < best_rank:
             best_rank = rank

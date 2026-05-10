@@ -9,7 +9,7 @@ from app.local_env import load_project_env
 
 load_project_env()
 
-# Canonical output folders used by sorter in strict mode.
+# Canonical output folders for the «furry» preset (strict tag mode).
 CANONICAL_CATEGORIES: tuple[str, ...] = (
     "explicit_zoo_real_animal",
     "furry_nsfw_canidae",
@@ -33,8 +33,7 @@ CANONICAL_CATEGORIES: tuple[str, ...] = (
     "uncategorized",
 )
 
-# Strict category list (exact tag strings for model output).
-# First block is canonical folders, second block keeps legacy compatibility tags.
+# «Furry» preset: exact tag strings for strict mode (canonical + legacy aliases).
 CATEGORIES: tuple[str, ...] = (
     *CANONICAL_CATEGORIES,
     # Legacy tags (kept for backwards compatibility and prompt understanding)
@@ -45,7 +44,39 @@ CATEGORIES: tuple[str, ...] = (
     "cars_and_bmw",
 )
 
-CATEGORY_WHITELIST: frozenset[str] = frozenset(CATEGORIES)
+# «Общий» preset: furry tags plus extra buckets for geek / IT / car culture / nightlife / LGBTQ+ galleries.
+GENERAL_EXTRA_CATEGORIES: tuple[str, ...] = (
+    "tech_desk_setup",
+    "pc_build_and_hardware",
+    "coding_ide_and_terminal",
+    "gaming_ui_screenshots",
+    "gaming_room_setup",
+    "anime_and_manga",
+    "comics_and_superheroes",
+    "board_games_tabletop",
+    "sneakers_and_streetwear",
+    "gym_and_fitness",
+    "car_mods_and_meets",
+    "nightlife_party",
+    "coffee_and_food_aesthetic",
+    "music_festival_live",
+    "travel_urban_explore",
+    "pride_and_lgbt_events",
+    "gay_male_nsfw_solo",
+    "gay_male_nsfw_couple",
+    "queer_art_sfw",
+    "tattoos_and_body_art",
+    "streaming_and_webcam",
+    "sci_fi_collectibles",
+)
+
+GENERAL_CATEGORIES: tuple[str, ...] = (*CATEGORIES, *GENERAL_EXTRA_CATEGORIES)
+
+FURRY_CATEGORY_WHITELIST: frozenset[str] = frozenset(CATEGORIES)
+GENERAL_CATEGORY_WHITELIST: frozenset[str] = frozenset(GENERAL_CATEGORIES)
+
+# Backwards-compatible name: same as furry preset (strict matching).
+CATEGORY_WHITELIST: frozenset[str] = FURRY_CATEGORY_WHITELIST
 CANONICAL_CATEGORY_WHITELIST: frozenset[str] = frozenset(CANONICAL_CATEGORIES)
 
 UNCATEGORIZED = "uncategorized"
@@ -150,6 +181,73 @@ CATEGORY_PROMPTS: dict[str, str] = {
     "cars_and_bmw": (
         "Legacy alias for vehicles_and_racing."
     ),
+    # --- «Общий» preset: extra categories (after furry list) ---
+    "tech_desk_setup": (
+        "Desk / battlestation: monitors, peripherals, cable management, home office rig (not a full PC build teardown)."
+    ),
+    "pc_build_and_hardware": (
+        "PC internals and hardware focus: GPUs, motherboards, cooling, benchmarks, component boxes."
+    ),
+    "coding_ide_and_terminal": (
+        "IDE, code editor, stack traces, terminal windows, git CLI, config files as main subject."
+    ),
+    "gaming_ui_screenshots": (
+        "In-game UI, HUD, menus, achievements, match results; gameplay screen as primary content."
+    ),
+    "gaming_room_setup": (
+        "Gaming space: consoles, RGB rigs, posters, shelves of games; not only a generic desk photo."
+    ),
+    "anime_and_manga": (
+        "Anime / manga art, covers, figures posed as collectibles, cosplay clearly referencing 2D franchises."
+    ),
+    "comics_and_superheroes": (
+        "Western comics, superhero merch, comic con cosplay (non-anime), graphic novel art."
+    ),
+    "board_games_tabletop": (
+        "Board games, RPG tables, dice, miniatures battle scenes, card games in play."
+    ),
+    "sneakers_and_streetwear": (
+        "Sneakers, streetwear fits, hype drops, outfit flatlays where footwear or urban fashion dominates."
+    ),
+    "gym_and_fitness": (
+        "Gym training, progress pics, sportswear, weights and machines as main subject."
+    ),
+    "car_mods_and_meets": (
+        "Modified cars, stance, wraps, car-meet culture; use when tuning/meet vibe matters more than generic driving."
+    ),
+    "nightlife_party": (
+        "Club, party, bar night, dance floor lighting, social night-out photos."
+    ),
+    "coffee_and_food_aesthetic": (
+        "Café flatlays, brunch, craft drinks, food styling as main subject."
+    ),
+    "music_festival_live": (
+        "Concerts, festivals, stage lights, crowd from live music events."
+    ),
+    "travel_urban_explore": (
+        "City travel, street exploration, architecture walks; not pure landscape wallpaper."
+    ),
+    "pride_and_lgbt_events": (
+        "Pride parades, rainbow flags, LGBT community events, protest or celebration context."
+    ),
+    "gay_male_nsfw_solo": (
+        "NSFW male-presenting solo erotic content; not the app owner unless USER_CONTEXT matches."
+    ),
+    "gay_male_nsfw_couple": (
+        "NSFW male+male couple erotic content; not the app owner unless USER_CONTEXT matches."
+    ),
+    "queer_art_sfw": (
+        "SFW queer-themed illustration or photography without explicit sex acts."
+    ),
+    "tattoos_and_body_art": (
+        "Tattoos, piercings, body art close-ups as the primary subject."
+    ),
+    "streaming_and_webcam": (
+        "Stream overlay, chat on screen, OBS layout, webcam framing for content creators."
+    ),
+    "sci_fi_collectibles": (
+        "Sci-fi models, props, franchise collectibles (non-anime), helmets, replicas."
+    ),
 }
 
 # Статичные изображения (без .gif — см. режим сканирования)
@@ -207,7 +305,7 @@ VIDEO_FRAGMENT_DECODE_SEC = 0.15
 FFMPEG_FRAME_TIMEOUT_SEC = 45.0
 
 # Версия пайплайна (категории / кадры / промпт): смена → переобработка в БД
-PIPELINE_VERSION = "2026-05-10-structured-categories-v4"
+PIPELINE_VERSION = "2026-05-11-general-preset-v5"
 
 # Запас свободного места при копировании (байт)
 COPY_FREE_MARGIN_BYTES = 64 * 1024 * 1024
@@ -227,12 +325,34 @@ TAG_MERGE_PRIORITY: tuple[str, ...] = (
     "human_real_nsfw_female",
     "human_ai_gen_nsfw_male",
     "human_ai_gen_nsfw_female",
+    "gay_male_nsfw_solo",
+    "gay_male_nsfw_couple",
     "vehicles_and_racing",
     "human_real_sfw",
     "human_ai_gen_sfw",
     "real_animals",
     "memes_and_screenshots",
     "landscapes_and_objects",
+    "queer_art_sfw",
+    "pride_and_lgbt_events",
+    "tech_desk_setup",
+    "pc_build_and_hardware",
+    "coding_ide_and_terminal",
+    "gaming_ui_screenshots",
+    "gaming_room_setup",
+    "anime_and_manga",
+    "comics_and_superheroes",
+    "board_games_tabletop",
+    "sneakers_and_streetwear",
+    "gym_and_fitness",
+    "car_mods_and_meets",
+    "nightlife_party",
+    "coffee_and_food_aesthetic",
+    "music_festival_live",
+    "travel_urban_explore",
+    "tattoos_and_body_art",
+    "streaming_and_webcam",
+    "sci_fi_collectibles",
     "uncategorized",
 )
 
