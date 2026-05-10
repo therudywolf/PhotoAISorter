@@ -3,8 +3,8 @@
 from pathlib import Path
 from queue import Queue
 
-from app.constants import MediaScanMode
-from app.db import Database
+from app.constants import MediaScanMode, PIPELINE_VERSION
+from app.db import Database, make_sort_session_key
 from app.images import file_sha256
 from app.worker import SortWorker, iter_media_files
 
@@ -233,4 +233,49 @@ def test_sort_worker_review_first_writes_manifest_without_copy(tmp_path: Path, m
     assert "vehicles_and_racing" in manifests[0].read_text(encoding="utf-8")
     assert not (dst / "vehicles_and_racing" / "a.jpg").exists()
     assert db.is_processed(file_sha256(f)) is False
+    db.close()
+
+
+def test_sort_worker_resume_session_skips_done_path(tmp_path: Path, monkeypatch: object) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    f = src / "a.jpg"
+    f.write_bytes(b"fake")
+
+    monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr("app.worker.chat_completion", lambda *_a, **_k: "vehicles_and_racing")
+
+    db = Database(tmp_path / "state.sqlite3")
+    key = make_sort_session_key(
+        str(src.resolve()),
+        str(dst.resolve()),
+        MediaScanMode.PHOTOS_ONLY.value,
+        "strict",
+        False,
+        PIPELINE_VERSION,
+    )
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=1, session_key=key)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
+    assert (dst / "vehicles_and_racing" / "a.jpg").exists()
+
+    def fail_chat(*_a: object, **_k: object) -> str:
+        raise AssertionError("resume should skip already completed path before API")
+
+    monkeypatch.setattr("app.worker.chat_completion", fail_chat)
+    q2 = Queue()
+    w2 = SortWorker(
+        db,
+        q2,
+        api_base="http://x",
+        model="m",
+        workers=1,
+        session_key=key,
+        resume_session=True,
+    )
+    w2.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
+
+    assert len(list((dst / "vehicles_and_racing").glob("a*.jpg"))) == 1
     db.close()

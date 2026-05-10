@@ -17,6 +17,7 @@ The app is designed for private local media libraries that may contain personal 
 - Lightweight LM Studio vision benchmark for choosing a model.
 - Prompt composer and editable auto-category aliases.
 - Review-first sort manifests under `_review_runs`.
+- Resumable sort sessions with saved progress after stop, crash, or reboot.
 - LM health telemetry in the GUI.
 - Hash cache for resumable sorting.
 - Exact and perceptual duplicate detection.
@@ -136,6 +137,15 @@ Enable `Review-first` to classify files without copying them. The app writes JSO
 ```
 
 Each line includes the source path, SHA-256, category, candidates, confidence, short reason, review flag, and raw model output excerpt.
+
+## Resuming Large Runs
+
+Sorting progress is saved into the local SQLite app data database. If a run is
+stopped or the PC shuts down, reopen the app and use `Продолжить сессию`, or
+start the same input/output/mode again and choose `Да` when prompted.
+
+The resume path stores per-file path, size, mtime, SHA-256, category, and session
+status locally. API keys are not written into session records.
 
 ## Category Aliases
 

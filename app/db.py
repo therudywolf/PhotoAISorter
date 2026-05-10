@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 Status = Literal["pending", "processed"]
 
@@ -20,6 +22,36 @@ CREATE TABLE IF NOT EXISTS files (
     updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
+
+CREATE TABLE IF NOT EXISTS sort_sessions (
+    session_key TEXT PRIMARY KEY NOT NULL,
+    source_dir TEXT NOT NULL,
+    dest_dir TEXT NOT NULL,
+    media_mode TEXT NOT NULL,
+    tag_mode TEXT NOT NULL,
+    review_first INTEGER NOT NULL,
+    pipeline_version TEXT NOT NULL,
+    total_files INTEGER NOT NULL,
+    done_files INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    payload_json TEXT,
+    started_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sort_sessions_status_updated ON sort_sessions(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS sort_session_items (
+    session_key TEXT NOT NULL,
+    path_norm TEXT NOT NULL,
+    status TEXT NOT NULL,
+    mtime_ns INTEGER NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    sha256 TEXT,
+    category TEXT,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (session_key, path_norm)
+);
+CREATE INDEX IF NOT EXISTS idx_sort_items_session_status ON sort_session_items(session_key, status);
 """
 
 
@@ -30,6 +62,27 @@ def default_db_path() -> Path:
         if base:
             return Path(base) / "PhotoAISorter" / "state.sqlite3"
     return Path.home() / ".local" / "share" / "PhotoAISorter" / "state.sqlite3"
+
+
+def make_sort_session_key(
+    source_dir: str,
+    dest_dir: str,
+    media_mode: str,
+    tag_mode: str,
+    review_first: bool,
+    pipeline_version: str,
+) -> str:
+    raw = "|".join(
+        [
+            str(Path(source_dir).resolve()),
+            str(Path(dest_dir).resolve()),
+            str(media_mode),
+            str(tag_mode),
+            "review" if review_first else "copy",
+            str(pipeline_version),
+        ]
+    ).encode("utf-8", errors="ignore")
+    return hashlib.sha256(raw).hexdigest()
 
 
 class Database:
@@ -157,7 +210,9 @@ class Database:
             row = self._conn.execute("SELECT COUNT(*) FROM files").fetchone()
             n = int(row[0]) if row else 0
             self._conn.execute("DELETE FROM files")
-            self._pending_writes += 1
+            self._conn.execute("DELETE FROM sort_sessions")
+            self._conn.execute("DELETE FROM sort_session_items")
+            self._pending_writes += 3
             self._maybe_commit(force=True)
             return n
 
@@ -165,3 +220,156 @@ class Database:
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) FROM files").fetchone()
             return int(row[0]) if row else 0
+
+    def get_sort_session(self, session_key: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM sort_sessions WHERE session_key = ?",
+                (session_key,),
+            ).fetchone()
+
+    def latest_incomplete_sort_session(self) -> sqlite3.Row | None:
+        with self._lock:
+            return self._conn.execute(
+                """
+                SELECT * FROM sort_sessions
+                WHERE status IN ('running', 'interrupted', 'stopped', 'error')
+                  AND (total_files <= 0 OR done_files < total_files)
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+
+    def mark_running_sort_sessions_interrupted(self) -> int:
+        with self._lock:
+            rows = self._conn.execute("SELECT COUNT(*) FROM sort_sessions WHERE status = 'running'").fetchone()
+            n = int(rows[0]) if rows else 0
+            if n:
+                self._conn.execute(
+                    "UPDATE sort_sessions SET status = 'interrupted', updated_at = ? WHERE status = 'running'",
+                    (time.time(),),
+                )
+                self._pending_writes += 1
+                self._maybe_commit(force=True)
+            return n
+
+    def upsert_sort_session(
+        self,
+        *,
+        session_key: str,
+        source_dir: str,
+        dest_dir: str,
+        media_mode: str,
+        tag_mode: str,
+        review_first: bool,
+        pipeline_version: str,
+        total_files: int,
+        done_files: int,
+        status: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO sort_sessions (
+                    session_key, source_dir, dest_dir, media_mode, tag_mode, review_first,
+                    pipeline_version, total_files, done_files, status, payload_json,
+                    started_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_key) DO UPDATE SET
+                    source_dir = excluded.source_dir,
+                    dest_dir = excluded.dest_dir,
+                    media_mode = excluded.media_mode,
+                    tag_mode = excluded.tag_mode,
+                    review_first = excluded.review_first,
+                    pipeline_version = excluded.pipeline_version,
+                    total_files = excluded.total_files,
+                    done_files = excluded.done_files,
+                    status = excluded.status,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    session_key,
+                    source_dir,
+                    dest_dir,
+                    media_mode,
+                    tag_mode,
+                    1 if review_first else 0,
+                    pipeline_version,
+                    int(total_files),
+                    int(done_files),
+                    status,
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            self._pending_writes += 1
+            self._maybe_commit()
+
+    def sort_session_item_status(
+        self,
+        session_key: str,
+        path_norm: str,
+        *,
+        mtime_ns: int,
+        size_bytes: int,
+    ) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT status FROM sort_session_items
+                WHERE session_key = ? AND path_norm = ? AND mtime_ns = ? AND size_bytes = ?
+                """,
+                (session_key, path_norm, int(mtime_ns), int(size_bytes)),
+            ).fetchone()
+            return str(row["status"]) if row else None
+
+    def mark_sort_session_item(
+        self,
+        session_key: str,
+        path_norm: str,
+        *,
+        status: str,
+        mtime_ns: int,
+        size_bytes: int,
+        sha256: str | None = None,
+        category: str | None = None,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO sort_session_items (
+                    session_key, path_norm, status, mtime_ns, size_bytes,
+                    sha256, category, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_key, path_norm) DO UPDATE SET
+                    status = excluded.status,
+                    mtime_ns = excluded.mtime_ns,
+                    size_bytes = excluded.size_bytes,
+                    sha256 = excluded.sha256,
+                    category = excluded.category,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    session_key,
+                    path_norm,
+                    status,
+                    int(mtime_ns),
+                    int(size_bytes),
+                    sha256,
+                    category,
+                    time.time(),
+                ),
+            )
+            self._pending_writes += 1
+            self._maybe_commit()
+
+    def clear_sort_session(self, session_key: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM sort_sessions WHERE session_key = ?", (session_key,))
+            self._conn.execute("DELETE FROM sort_session_items WHERE session_key = ?", (session_key,))
+            self._pending_writes += 2
+            self._maybe_commit(force=True)

@@ -29,7 +29,7 @@ from app.constants import (
     VIDEO_EXTENSIONS,
     VIDEO_FRAME_COUNT,
 )
-from app.db import Database
+from app.db import Database, make_sort_session_key
 from app.images import file_sha256, image_to_jpeg_base64_data_uri, pil_image_to_jpeg_data_uri
 from app.lm_studio import CHAT_COMPLETION_MAX_TOKENS, chat_completion, chat_completion_multi, classify_frames
 from app.review_manifest import SortReviewManifest
@@ -127,6 +127,8 @@ class SortWorker:
         temperature: float = 0.2,
         max_tokens: int = CHAT_COMPLETION_MAX_TOKENS,
         request_timeout_sec: float | None = None,
+        session_key: str | None = None,
+        resume_session: bool = False,
     ) -> None:
         self.db = db
         self.out_queue = out_queue
@@ -143,6 +145,8 @@ class SortWorker:
         self.temperature = max(0.0, min(2.0, float(temperature)))
         self.max_tokens = max(1, min(4096, int(max_tokens)))
         self.request_timeout_sec = request_timeout_sec
+        self.session_key = session_key
+        self.resume_session = bool(resume_session)
 
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -232,6 +236,54 @@ class SortWorker:
             total = len(files)
             self._emit({"type": "scan_done", "total": total})
             tag_mode = "auto" if self.auto_tag_mode else ("free" if self.free_tag_mode else "strict")
+            session_key = self.session_key or make_sort_session_key(
+                str(source_dir),
+                str(dest_dir),
+                media_mode.value,
+                tag_mode,
+                self.review_first,
+                PIPELINE_VERSION,
+            )
+
+            def _session_payload() -> dict[str, Any]:
+                return {
+                    "model": self.model,
+                    "workers": self.workers,
+                    "structured_output": self.structured_output,
+                    "prompt_extra": self.prompt_extra,
+                    "auto_tag_mode": self.auto_tag_mode,
+                    "free_tag_mode": self.free_tag_mode,
+                }
+
+            def save_session(status: str, done_files: int, *, force: bool = False) -> None:
+                try:
+                    self.db.upsert_sort_session(
+                        session_key=session_key,
+                        source_dir=str(source_dir),
+                        dest_dir=str(dest_dir),
+                        media_mode=media_mode.value,
+                        tag_mode=tag_mode,
+                        review_first=self.review_first,
+                        pipeline_version=PIPELINE_VERSION,
+                        total_files=total,
+                        done_files=done_files,
+                        status=status,
+                        payload=_session_payload(),
+                    )
+                except Exception as e:
+                    if force:
+                        self._emit({"type": "log", "text": f"session save error: {e!s}"})
+
+            save_session("running", 0)
+            self._emit(
+                {
+                    "type": "session",
+                    "session_key": session_key,
+                    "status": "running",
+                    "done": 0,
+                    "total": total,
+                }
+            )
             manifest = (
                 SortReviewManifest(
                     dest_dir,
@@ -310,6 +362,8 @@ class SortWorker:
                             "eta_sec": eta_sec,
                         }
                     )
+                    if done % 20 == 0 or done == total:
+                        save_session("running", done)
 
             def _mode_name() -> str:
                 if self.auto_tag_mode:
@@ -399,6 +453,26 @@ class SortWorker:
 
                 t0 = time.monotonic()
                 self._emit({"type": "current", "path": str(path)})
+                path_norm = str(path.resolve())
+                try:
+                    st = path.stat()
+                    mtime_ns = int(st.st_mtime_ns)
+                    size_bytes = int(st.st_size)
+                except OSError as e:
+                    self._emit({"type": "log", "text": f"stat error {path}: {e}"})
+                    complete_task(time.monotonic() - t0)
+                    return
+
+                if self.resume_session and self.db.sort_session_item_status(
+                    session_key,
+                    path_norm,
+                    mtime_ns=mtime_ns,
+                    size_bytes=size_bytes,
+                ) == "done":
+                    metrics["cache_skip"] += 1
+                    self._emit({"type": "log", "text": f"resume skip: {path}"})
+                    complete_task(time.monotonic() - t0)
+                    return
 
                 try:
                     digest = file_sha256(path)
@@ -410,6 +484,15 @@ class SortWorker:
                 skip = self.db.upsert_file_record(digest, str(path), PIPELINE_VERSION)
                 if skip == "skip":
                     metrics["cache_skip"] += 1
+                    self.db.mark_sort_session_item(
+                        session_key,
+                        path_norm,
+                        status="done",
+                        mtime_ns=mtime_ns,
+                        size_bytes=size_bytes,
+                        sha256=digest,
+                        category="cached",
+                    )
                     self._emit({"type": "log", "text": f"skip (already processed): {path}"})
                     complete_task(time.monotonic() - t0)
                     return
@@ -551,6 +634,15 @@ class SortWorker:
                 tag_dir = dest_dir / category
                 if self.review_first:
                     _record_review(path, digest, result)
+                    self.db.mark_sort_session_item(
+                        session_key,
+                        path_norm,
+                        status="done",
+                        mtime_ns=mtime_ns,
+                        size_bytes=size_bytes,
+                        sha256=digest,
+                        category=category,
+                    )
                     self._emit(
                         {
                             "type": "log",
@@ -576,6 +668,15 @@ class SortWorker:
                             dest_file = unique_dest_path(tag_dir, path.name)
                             shutil.copy2(path, dest_file)
                         self.db.mark_processed(digest, category, PIPELINE_VERSION)
+                        self.db.mark_sort_session_item(
+                            session_key,
+                            path_norm,
+                            status="done",
+                            mtime_ns=mtime_ns,
+                            size_bytes=size_bytes,
+                            sha256=digest,
+                            category=category,
+                        )
                         metrics["copied"] += 1
                         _record_review(path, digest, result, copied_to=str(dest_file))
                         self._emit({"type": "log", "text": f"{path.name} -> {category}"})
@@ -594,6 +695,7 @@ class SortWorker:
                 complete_task(time.monotonic() - t0)
 
             if not files:
+                save_session("completed", 0, force=True)
                 return
 
             workers = max(1, min(self.workers, len(files)))
@@ -616,12 +718,26 @@ class SortWorker:
                             fut.cancel()
             finally:
                 executor.shutdown(wait=True, cancel_futures=self._stop.is_set())
+            if finish_reason == "stopped" and done >= total:
+                finish_reason = "completed"
 
         except Exception as e:
             self._emit({"type": "log", "text": f"fatal: {e!s}"})
             finish_reason = "error"
         finally:
             elapsed = max(0.001, time.monotonic() - started_ts)
+            if "save_session" in locals():
+                session_status = "completed" if finish_reason == "completed" else finish_reason
+                save_session(session_status, done if "done" in locals() else 0, force=True)
+                self._emit(
+                    {
+                        "type": "session",
+                        "session_key": session_key if "session_key" in locals() else "",
+                        "status": session_status,
+                        "done": done if "done" in locals() else 0,
+                        "total": total if "total" in locals() else 0,
+                    }
+                )
             self._emit(
                 {
                     "type": "metric",
@@ -662,8 +778,13 @@ class SortWorker:
         *,
         media_mode: MediaScanMode = MediaScanMode.PHOTOS_ONLY,
         on_complete: Callable[[], None] | None = None,
+        session_key: str | None = None,
+        resume_session: bool = False,
     ) -> None:
         self._run_id = uuid.uuid4().hex
+        if session_key:
+            self.session_key = session_key
+        self.resume_session = bool(resume_session)
 
         def target() -> None:
             try:
@@ -676,3 +797,9 @@ class SortWorker:
         self._thread = threading.Thread(target=target, daemon=True)
         self._thread.start()
 
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def is_alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())

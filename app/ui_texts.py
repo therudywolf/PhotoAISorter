@@ -78,7 +78,7 @@ TEXTS: dict[str, str] = {
     "buttons.start": "Старт",
     "buttons.pause": "Пауза",
     "buttons.resume": "Продолжить",
-    "buttons.stop": "Стоп",
+    "buttons.stop": "Стоп/сохранить",
     "buttons.clear_cache": "Очистить кеш",
     "eta.left": "Осталось: —",
     "eta.estimate_after_first": "Осталось: оценка после первого файла...",

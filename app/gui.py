@@ -13,8 +13,16 @@ import customtkinter as ctk
 
 from app.cache_service import CacheService
 from app.category_aliases import load_category_aliases, save_category_aliases, normalize_aliases
-from app.constants import CANONICAL_CATEGORIES, DEFAULT_API_BASE, DEFAULT_API_KEY, DEFAULT_MODEL, LOG_MAX_LINES, MediaScanMode
-from app.db import Database
+from app.constants import (
+    CANONICAL_CATEGORIES,
+    DEFAULT_API_BASE,
+    DEFAULT_API_KEY,
+    DEFAULT_MODEL,
+    LOG_MAX_LINES,
+    MediaScanMode,
+    PIPELINE_VERSION,
+)
+from app.db import Database, make_sort_session_key
 from app.gui_duplicates import DuplicatesPane
 from app.model_profiles import ModelProfile, merge_profiles, profiles_to_settings
 from app.settings_store import load_gui_settings, load_secret_settings, save_gui_settings, save_secret_settings
@@ -73,6 +81,7 @@ class App(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self._db = Database()
+        self._interrupted_sort_sessions = self._db.mark_running_sort_sessions_interrupted()
         self._sig_db = SignatureDatabase()
         self._cache_service = CacheService(self._db, self._sig_db)
         self._msg_queue: queue.Queue = queue.Queue()
@@ -122,6 +131,8 @@ class App(ctk.CTk):
         self._review_first_var = ctk.BooleanVar(value=bool(saved.get("review_first_sort", False)))
 
         self._build()
+        if self._interrupted_sort_sessions:
+            self._append_log(f"Найдено прерванных сессий сортировки: {self._interrupted_sort_sessions}.")
         if self._cache_clear_on_start:
             self._cache_service.clear_all()
             self._append_log("Кеш очищен при запуске (по настройке).")
@@ -134,6 +145,7 @@ class App(ctk.CTk):
         self._media_mode_var.trace_add("write", lambda *_: self.after(0, self._update_ffmpeg_hint))
         self._update_start_state()
         self._update_ffmpeg_hint()
+        self._refresh_resume_sort_button()
         self.after(100, self._poll_queue)
 
     def _model_resolved(self) -> str:
@@ -374,6 +386,14 @@ class App(ctk.CTk):
         btns.pack(fill="x", **pad)
         self._btn_start = ctk.CTkButton(btns, text=t("buttons.start"), command=self._on_start, state="disabled")
         self._btn_start.pack(side="left", padx=(0, 8))
+        self._btn_resume_sort = ctk.CTkButton(
+            btns,
+            text="Продолжить сессию",
+            width=170,
+            command=self._on_resume_last_sort,
+            state="disabled",
+        )
+        self._btn_resume_sort.pack(side="left", padx=(0, 8))
         self._btn_pause = ctk.CTkButton(btns, text=t("buttons.pause"), command=self._on_pause, state="disabled")
         self._btn_pause.pack(side="left", padx=(0, 8))
         self._btn_stop = ctk.CTkButton(btns, text=t("buttons.stop"), command=self._on_stop, state="disabled")
@@ -470,6 +490,11 @@ class App(ctk.CTk):
             self._btn_profile_save.configure(state="disabled" if busy or self._running else "normal")
         if hasattr(self, "_chk_review_first"):
             self._chk_review_first.configure(state="disabled" if self._running else "normal")
+        if hasattr(self, "_btn_resume_sort"):
+            if busy or self._running or self._latest_sort_session() is None:
+                self._btn_resume_sort.configure(state="disabled")
+            else:
+                self._btn_resume_sort.configure(state="normal")
 
     def _on_clear_hash_cache(self) -> None:
         if self._running:
@@ -626,7 +651,85 @@ class App(ctk.CTk):
         ok = bool(self._in_var.get().strip() and self._out_var.get().strip())
         if not self._running:
             self._btn_start.configure(state="normal" if ok else "disabled")
+            if hasattr(self, "_btn_resume_sort"):
+                self._refresh_resume_sort_button()
         self._set_probe_busy(self._probe_busy)
+
+    def _latest_sort_session(self):
+        return self._db.latest_incomplete_sort_session()
+
+    def _sort_session_key_for_current(self, source_dir: Path, dest_dir: Path, media_mode: MediaScanMode, tag_mode: str) -> str:
+        return make_sort_session_key(
+            str(source_dir.resolve()),
+            str(dest_dir.resolve()),
+            media_mode.value,
+            tag_mode,
+            bool(self._review_first_var.get()),
+            PIPELINE_VERSION,
+        )
+
+    def _refresh_resume_sort_button(self) -> None:
+        if not hasattr(self, "_btn_resume_sort"):
+            return
+        row = self._latest_sort_session()
+        if row is None or self._running:
+            self._btn_resume_sort.configure(state="disabled")
+            return
+        self._btn_resume_sort.configure(state="normal")
+
+    def _sort_session_summary(self, row) -> str:
+        done = int(row["done_files"] or 0)
+        total = int(row["total_files"] or 0)
+        status = str(row["status"] or "unknown")
+        src = str(row["source_dir"] or "")
+        return f"{done}/{total} файлов, статус {status}\n{src}"
+
+    def _apply_sort_session_to_fields(self, row) -> None:
+        self._in_var.set(str(row["source_dir"] or ""))
+        self._out_var.set(str(row["dest_dir"] or ""))
+        mm = str(row["media_mode"] or MediaScanMode.PHOTOS_ONLY.value)
+        if mm in {m.value for m in MediaScanMode}:
+            self._media_mode_var.set(mm)
+        tag_mode = str(row["tag_mode"] or "strict")
+        if tag_mode in {"strict", "auto", "free"}:
+            self._tag_mode_var.set(tag_mode)
+        self._review_first_var.set(bool(int(row["review_first"] or 0)))
+
+    def _ask_sort_resume_mode(self, session_key: str) -> tuple[bool, bool]:
+        row = self._db.get_sort_session(session_key)
+        if row is None:
+            return False, False
+        total = int(row["total_files"] or 0)
+        done = int(row["done_files"] or 0)
+        status = str(row["status"] or "")
+        if total <= 0 or (status == "completed" and done >= total):
+            return False, False
+        res = messagebox.askyesnocancel(
+            "Найден сохранённый прогресс",
+            (
+                "Для этих параметров сортировки уже есть сессия:\n\n"
+                f"{self._sort_session_summary(row)}\n\n"
+                "Да — продолжить\n"
+                "Нет — начать новую сессию (общий SHA-кеш всё равно сохранится)\n"
+                "Отмена — не запускать"
+            ),
+        )
+        if res is None:
+            return True, False
+        if res:
+            return False, True
+        self._db.clear_sort_session(session_key)
+        return False, False
+
+    def _on_resume_last_sort(self) -> None:
+        row = self._latest_sort_session()
+        if row is None:
+            self._append_log("Нет сохранённых сессий сортировки для продолжения.")
+            self._refresh_resume_sort_button()
+            return
+        self._apply_sort_session_to_fields(row)
+        self._append_log(f"Продолжение сессии сортировки: {self._sort_session_summary(row)}")
+        self._on_start(force_resume=True)
 
     def _apply_model_profile(self) -> None:
         p = self._active_profile()
@@ -893,7 +996,7 @@ class App(ctk.CTk):
         threading.Thread(target=work, daemon=True).start()
         self._append_log("Запуск самотеста API...")
 
-    def _on_start(self) -> None:
+    def _on_start(self, *, force_resume: bool = False) -> None:
         in_path = Path(self._in_var.get().strip())
         out_path = Path(self._out_var.get().strip())
         if not in_path.is_dir():
@@ -917,23 +1020,34 @@ class App(ctk.CTk):
         api_base = self._api_var.get().strip() or DEFAULT_API_BASE
         model = self._model_resolved()
 
+        try:
+            media_mode = MediaScanMode(self._media_mode_var.get())
+        except ValueError:
+            media_mode = MediaScanMode.PHOTOS_ONLY
+        tag_mode = self._tag_mode_var.get()
+        session_key = self._sort_session_key_for_current(in_path, out_path, media_mode, tag_mode)
+        resume_session = bool(force_resume)
+        if not force_resume:
+            cancelled, resume_session = self._ask_sort_resume_mode(session_key)
+            if cancelled:
+                return
+
         self._set_controls_running(True)
         self._done_files = 0
         self._total_files = 0
         self._progress.set(0)
         self._prog_label.configure(text="0 / …")
         self._eta_label.configure(text=t("eta.estimate_after_first"))
-        try:
-            media_mode = MediaScanMode(self._media_mode_var.get())
-        except ValueError:
-            media_mode = MediaScanMode.PHOTOS_ONLY
         mode_labels = {
             MediaScanMode.PHOTOS_ONLY: "только фото",
             MediaScanMode.PHOTOS_AND_VIDEO: "фото + видео",
             MediaScanMode.VIDEO_ONLY: "только видео",
         }
         self._append_log(f"--- Старт (режим: {mode_labels.get(media_mode, media_mode.value)}) ---")
-        tag_mode = self._tag_mode_var.get()
+        if resume_session:
+            self._append_log("Сессия: продолжение сохранённого прогресса.")
+        else:
+            self._append_log("Сессия: новая или без найденного незавершённого прогресса.")
         if tag_mode == "strict":
             self._append_log(t("sort.log_mode_strict"))
         elif tag_mode == "auto":
@@ -961,13 +1075,22 @@ class App(ctk.CTk):
             temperature=profile.temperature,
             max_tokens=profile.max_tokens,
             request_timeout_sec=profile.timeout_sec,
+            session_key=session_key,
+            resume_session=resume_session,
         )
         prompt_extra = self._prompt_extra_var.get().strip()
         self._worker.prompt_extra = prompt_extra
         self._worker.reset_stop()
         self._worker.set_paused(False)
 
-        self._worker.start_in_thread(in_path, out_path, user_context, media_mode=media_mode)
+        self._worker.start_in_thread(
+            in_path,
+            out_path,
+            user_context,
+            media_mode=media_mode,
+            session_key=session_key,
+            resume_session=resume_session,
+        )
         self._current_run_id = self._worker.run_id
 
     def _on_pause(self) -> None:
@@ -981,7 +1104,7 @@ class App(ctk.CTk):
     def _on_stop(self) -> None:
         if self._worker:
             self._worker.request_stop()
-            self._append_log("Стоп запрошен (после текущего запроса)...")
+            self._append_log("Стоп запрошен: прогресс сессии сохранится после текущего файла/запроса...")
 
     def _poll_queue(self) -> None:
         try:
@@ -1044,7 +1167,14 @@ class App(ctk.CTk):
             self._worker = None
             self._current_run_id = None
             self._update_start_state()
+            self._refresh_resume_sort_button()
             self._save_gui_settings()
+        elif msg_type == "session":
+            status = str(msg.get("status", ""))
+            done = int(msg.get("done", 0) or 0)
+            total = int(msg.get("total", 0) or 0)
+            if status and status != "running":
+                self._append_log(f"Сессия сортировки сохранена: {status}, {done}/{total}.")
         elif msg_type == "state_changed":
             state = str(msg.get("state", ""))
             if state == TaskState.PAUSED.value:
@@ -1070,12 +1200,14 @@ class App(ctk.CTk):
     def on_close(self) -> None:
         if self._worker:
             self._worker.request_stop()
+            self._worker.join(5.0)
         if self._dup_pane is not None:
             self._dup_pane.on_app_close()
         else:
             self._sig_db.close()
         self._save_gui_settings()
-        self._db.close()
+        if not (self._worker and self._worker.is_alive()):
+            self._db.close()
         self.destroy()
 
 
