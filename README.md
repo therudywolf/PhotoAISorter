@@ -27,11 +27,25 @@ The app is designed for private local media libraries that may contain personal 
 
 ## Quick Start on Windows
 
+Double-click:
+
+```text
+START_Photo_AI_Sorter.cmd
+```
+
+The launcher creates `.venv`, installs dependencies when needed, runs import checks, and starts the GUI. The first launch can take a few minutes while packages are installed; later launches reuse the existing `.venv`.
+
+To create a real desktop shortcut, double-click once:
+
+```text
+CREATE_DESKTOP_SHORTCUT.cmd
+```
+
+For a diagnostic console run, use:
+
 ```bat
 run.bat
 ```
-
-The launcher creates `.venv`, installs dependencies, runs import checks, and starts the GUI.
 
 Run tests:
 

@@ -11,7 +11,7 @@ Use this checklist before pushing changes to `main`.
    git diff --check
    ```
 
-3. Start the app with `run.bat` on Windows for a GUI smoke test.
+3. Start the app with `START_Photo_AI_Sorter.cmd` on Windows for a one-click GUI smoke test.
 4. Run `Vision self-test` against the intended LM Studio server.
 5. Test sorting on a small sample with `Review-first` enabled.
 6. Inspect `_review_runs/.../manifest.jsonl` before a real library run.
