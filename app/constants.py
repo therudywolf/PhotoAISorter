@@ -5,6 +5,10 @@ from __future__ import annotations
 import os
 from enum import Enum
 
+from app.local_env import load_project_env
+
+load_project_env()
+
 # Canonical output folders used by sorter in strict mode.
 CANONICAL_CATEGORIES: tuple[str, ...] = (
     "explicit_zoo_real_animal",

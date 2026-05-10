@@ -13,11 +13,11 @@ import customtkinter as ctk
 
 from app.cache_service import CacheService
 from app.category_aliases import load_category_aliases, save_category_aliases, normalize_aliases
-from app.constants import CANONICAL_CATEGORIES, DEFAULT_API_BASE, DEFAULT_MODEL, LOG_MAX_LINES, MediaScanMode
+from app.constants import CANONICAL_CATEGORIES, DEFAULT_API_BASE, DEFAULT_API_KEY, DEFAULT_MODEL, LOG_MAX_LINES, MediaScanMode
 from app.db import Database
 from app.gui_duplicates import DuplicatesPane
 from app.model_profiles import ModelProfile, merge_profiles, profiles_to_settings
-from app.settings_store import load_gui_settings, save_gui_settings
+from app.settings_store import load_gui_settings, load_secret_settings, save_gui_settings, save_secret_settings
 from app.signature_db import SignatureDatabase
 from app.task_state import TaskState
 from app.ui_texts import t
@@ -82,6 +82,7 @@ class App(ctk.CTk):
         self._dup_pane: DuplicatesPane | None = None
 
         saved = load_gui_settings()
+        secrets = load_secret_settings()
         self._loaded_settings: dict = saved if isinstance(saved, dict) else {}
         cache_settings = saved.get("cache_settings", {}) if isinstance(saved, dict) else {}
         self._cache_clear_on_start = bool(isinstance(cache_settings, dict) and cache_settings.get("clear_on_start", False))
@@ -92,6 +93,9 @@ class App(ctk.CTk):
         self._out_var = ctk.StringVar(value=str(saved.get("output_dir", "") or ""))
         self._api_var = ctk.StringVar(
             value=str(saved.get("api_base", "") or "").strip() or DEFAULT_API_BASE
+        )
+        self._api_key_var = ctk.StringVar(
+            value=str(secrets.get("lm_studio_api_key", "") or DEFAULT_API_KEY).strip()
         )
         self._model_var = ctk.StringVar(value=t("lm.models.placeholder"))
         self._model_manual_var = ctk.StringVar(value=str(saved.get("model_manual", "") or ""))
@@ -144,6 +148,9 @@ class App(ctk.CTk):
     def _active_profile(self) -> ModelProfile:
         name = self._active_model_profile_var.get().strip() or "classifier"
         return self._model_profiles.get(name) or self._model_profiles["classifier"]
+
+    def _api_key_resolved(self) -> str:
+        return self._api_key_var.get().strip() or DEFAULT_API_KEY
 
     def _build(self) -> None:
         pad = {"padx": 12, "pady": 6}
@@ -248,6 +255,22 @@ class App(ctk.CTk):
         )
         self._btn_refresh = ctk.CTkButton(row_api, text=t("lm.refresh_models"), width=200, command=self._on_refresh_models)
         self._btn_refresh.pack(side="right")
+
+        row_key = ctk.CTkFrame(lm, fg_color="transparent")
+        row_key.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(row_key, text="API key:", width=120, anchor="w").pack(side="left")
+        ctk.CTkEntry(
+            row_key,
+            textvariable=self._api_key_var,
+            show="*",
+            placeholder_text="LM Studio token; хранится локально, не в git",
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            row_key,
+            text="Сохранить ключ",
+            width=150,
+            command=self._save_lm_secret_clicked,
+        ).pack(side="right")
 
         row_m = ctk.CTkFrame(lm, fg_color="transparent")
         row_m.pack(fill="x", padx=8, pady=(0, 4))
@@ -492,11 +515,16 @@ class App(ctk.CTk):
             try:
                 meta = None
                 try:
-                    meta = find_model_object(base, model) if model else None
+                    meta = find_model_object(base, model, api_key=self._api_key_resolved()) if model else None
                 except Exception:
                     meta = None
                 hint = vision_hint_from_model_dict(meta) if isinstance(meta, dict) else None
-                ok, detail = vision_self_test(base, model, image_path=path)
+                ok, detail = vision_self_test(
+                    base,
+                    model,
+                    api_key=self._api_key_resolved(),
+                    image_path=path,
+                )
 
                 def apply() -> None:
                     if hint is True:
@@ -583,8 +611,16 @@ class App(ctk.CTk):
                     "duplicate_finder": dup,
                 }
             )
+            save_secret_settings({"lm_studio_api_key": self._api_key_resolved()})
         except OSError:
             pass
+
+    def _save_lm_secret_clicked(self) -> None:
+        try:
+            save_secret_settings({"lm_studio_api_key": self._api_key_resolved()})
+            self._append_log("LM Studio API key сохранён локально в данных приложения (не в репозитории).")
+        except OSError as e:
+            messagebox.showerror(t("cache.error"), str(e))
 
     def _update_start_state(self) -> None:
         ok = bool(self._in_var.get().strip() and self._out_var.get().strip())
@@ -631,6 +667,7 @@ class App(ctk.CTk):
                 rows = benchmark_models(
                     base,
                     models,
+                    api_key=self._api_key_resolved(),
                     limit=8,
                     on_progress=lambda msg: self.after(0, lambda m=msg: self._append_log(m)),
                 )
@@ -757,7 +794,7 @@ class App(ctk.CTk):
         def work() -> None:
             self.after(0, lambda: self._set_probe_busy(True))
             try:
-                models = list_models(base)
+                models = list_models(base, api_key=self._api_key_resolved())
             except Exception as e:
                 self.after(0, lambda: self._append_log(f"Список моделей: ошибка {e!s}"))
                 self.after(0, lambda: self._set_probe_busy(False))
@@ -788,11 +825,11 @@ class App(ctk.CTk):
             try:
                 meta = None
                 try:
-                    meta = find_model_object(base, model) if model else None
+                    meta = find_model_object(base, model, api_key=self._api_key_resolved()) if model else None
                 except Exception:
                     meta = None
                 hint = vision_hint_from_model_dict(meta) if isinstance(meta, dict) else None
-                ok, detail = vision_self_test(base, model)
+                ok, detail = vision_self_test(base, model, api_key=self._api_key_resolved())
 
                 def apply() -> None:
                     if hint is True:
@@ -833,7 +870,7 @@ class App(ctk.CTk):
 
         def work() -> None:
             self.after(0, lambda: self._set_probe_busy(True))
-            ok, report = full_api_self_test(base, model)
+            ok, report = full_api_self_test(base, model, api_key=self._api_key_resolved())
 
             def apply() -> None:
                 self._append_log("——— Самотест ———")
@@ -914,6 +951,7 @@ class App(ctk.CTk):
             self._msg_queue,
             api_base=api_base,
             model=model,
+            api_key=self._api_key_resolved(),
             workers=workers,
             free_tag_mode=tag_mode == "free",
             auto_tag_mode=tag_mode == "auto",

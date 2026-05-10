@@ -36,6 +36,16 @@ from app.constants import (
 )
 
 
+def normalize_api_base(api_base: str) -> str:
+    """Accept server root or pasted endpoint prefixes and return the server root."""
+    base = str(api_base or "").strip().rstrip("/")
+    for suffix in ("/api/v1", "/v1"):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)].rstrip("/")
+            break
+    return base or DEFAULT_API_BASE.rstrip("/")
+
+
 def _resolve_api_key(api_key: str | None) -> str:
     if api_key is not None:
         return api_key.strip()
@@ -55,6 +65,38 @@ def _auth_headers_get(api_key: str | None) -> dict[str, str]:
     if not key:
         return {}
     return {"Authorization": f"Bearer {key}"}
+
+
+def _raise_for_status_with_hint(response: requests.Response, endpoint: str) -> None:
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        hint = ""
+        if response.status_code in (401, 403):
+            hint = " (LM Studio requires a valid API key; paste it in the app or set PHOTO_AI_SORTER_API_KEY)"
+        elif response.status_code == 404:
+            hint = " (check LM Studio API base URL; use the server root such as http://10.77.77.2:29931)"
+        raise requests.HTTPError(
+            f"{response.status_code} {response.reason} at {endpoint}{hint}",
+            response=response,
+        ) from e
+
+
+def endpoint_status(
+    api_base: str,
+    path: str,
+    *,
+    api_key: str | None = None,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> tuple[int | None, str]:
+    base = normalize_api_base(api_base)
+    url = f"{base}{path}"
+    try:
+        response = requests.get(url, headers=_auth_headers_get(api_key), timeout=timeout)
+    except requests.RequestException as e:
+        return None, str(e)
+    return response.status_code, response.reason
+
 
 def build_classification_system_prompt(
     user_context: str,
@@ -323,7 +365,7 @@ def _chat_completion_once(
     temperature: float,
     max_tokens: int,
 ) -> str:
-    base = api_base.rstrip("/")
+    base = normalize_api_base(api_base)
     url = f"{base}{CHAT_COMPLETIONS_PATH}"
     payload = {
         "model": model,
@@ -344,7 +386,7 @@ def _chat_completion_once(
         data=json.dumps(payload),
         timeout=timeout,
     )
-    r.raise_for_status()
+    _raise_for_status_with_hint(r, CHAT_COMPLETIONS_PATH)
     try:
         data = r.json()
     except json.JSONDecodeError as e:
@@ -376,7 +418,7 @@ def _chat_completion_multi_once(
 ) -> str:
     if not image_data_uris:
         raise ValueError("no images")
-    base = api_base.rstrip("/")
+    base = normalize_api_base(api_base)
     url = f"{base}{CHAT_COMPLETIONS_PATH}"
     payload = {
         "model": model,
@@ -397,7 +439,7 @@ def _chat_completion_multi_once(
         data=json.dumps(payload),
         timeout=timeout,
     )
-    r.raise_for_status()
+    _raise_for_status_with_hint(r, CHAT_COMPLETIONS_PATH)
     try:
         data = r.json()
     except json.JSONDecodeError as e:
@@ -661,7 +703,7 @@ def _vision_probe_once(
     api_key: str | None,
     timeout: tuple[float, float] | float,
 ) -> str:
-    base = api_base.rstrip("/")
+    base = normalize_api_base(api_base)
     url = f"{base}{CHAT_COMPLETIONS_PATH}"
     payload = {
         "model": model,
@@ -675,7 +717,7 @@ def _vision_probe_once(
         data=json.dumps(payload),
         timeout=timeout,
     )
-    r.raise_for_status()
+    _raise_for_status_with_hint(r, CHAT_COMPLETIONS_PATH)
     data = r.json()
     choices = data.get("choices") or []
     if not choices:
@@ -733,10 +775,10 @@ def list_models(
     timeout: float = API_PROBE_TIMEOUT_SEC,
 ) -> list[str]:
     """GET /v1/models — OpenAI-compatible model ids."""
-    base = api_base.rstrip("/")
+    base = normalize_api_base(api_base)
     url = f"{base}{MODELS_PATH}"
     r = requests.get(url, headers=_auth_headers_get(api_key), timeout=timeout)
-    r.raise_for_status()
+    _raise_for_status_with_hint(r, MODELS_PATH)
     data = r.json()
     items = data.get("data") or []
     ids: list[str] = []
@@ -765,6 +807,8 @@ def benchmark_models(
         t0 = time.monotonic()
         ok = False
         detail = ""
+        if on_progress:
+            on_progress(f"benchmark {model}: start")
         try:
             text = vision_probe_completion(
                 uri,
@@ -824,10 +868,10 @@ def find_model_object(
     api_key: str | None = None,
     timeout: float = API_PROBE_TIMEOUT_SEC,
 ) -> dict[str, Any] | None:
-    base = api_base.rstrip("/")
+    base = normalize_api_base(api_base)
     url = f"{base}{MODELS_PATH}"
     r = requests.get(url, headers=_auth_headers_get(api_key), timeout=timeout)
-    r.raise_for_status()
+    _raise_for_status_with_hint(r, MODELS_PATH)
     data = r.json()
     for m in data.get("data") or []:
         if isinstance(m, dict) and str(m.get("id")) == model_id:
@@ -898,6 +942,12 @@ def full_api_self_test(
     Returns (ok, human-readable report).
     """
     lines: list[str] = []
+    lines.append(f"Base URL: {normalize_api_base(api_base)}")
+    lines.append("Auth: " + ("API key present" if _resolve_api_key(api_key) else "no API key"))
+    for path in (MODELS_PATH, "/api/v1/models"):
+        code, reason = endpoint_status(api_base, path, api_key=api_key)
+        status = str(code) if code is not None else "network error"
+        lines.append(f"Endpoint GET {path}: {status} {reason}".strip())
     try:
         models = list_models(api_base, api_key=api_key)
         lines.append(f"Моделей в /v1/models: {len(models)}")
@@ -961,7 +1011,7 @@ def _pair_dup_once(
     api_key: str | None,
     timeout: tuple[float, float] | float,
 ) -> str:
-    base = api_base.rstrip("/")
+    base = normalize_api_base(api_base)
     url = f"{base}{CHAT_COMPLETIONS_PATH}"
     payload = {
         "model": model,
@@ -975,7 +1025,7 @@ def _pair_dup_once(
         data=json.dumps(payload),
         timeout=timeout,
     )
-    r.raise_for_status()
+    _raise_for_status_with_hint(r, CHAT_COMPLETIONS_PATH)
     try:
         data = r.json()
     except json.JSONDecodeError as e:

@@ -11,6 +11,25 @@ Photo AI Sorter talks to LM Studio through the OpenAI-compatible API.
 - If auth is required, set `PHOTO_AI_SORTER_API_KEY` in the environment before launching the app.
 - Optional defaults can be overridden with `PHOTO_AI_SORTER_API_BASE` and `PHOTO_AI_SORTER_MODEL`.
 
+Your current LM Studio Developer screen shows `Require Authentication` enabled and
+the server reachable at `http://10.77.77.2:29931`. For that setup use:
+
+```bash
+PHOTO_AI_SORTER_API_BASE=http://10.77.77.2:29931
+PHOTO_AI_SORTER_API_KEY=your-lm-studio-token
+```
+
+Put those values in `.env.local` or paste the token into the GUI `API key` field.
+Do not commit `.env.local`; it is intentionally ignored.
+
+The app uses LM Studio's OpenAI-compatible endpoints:
+
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+
+If you paste `http://host:port/v1` or `http://host:port/api/v1`, the app normalizes
+it back to the server root before building requests.
+
 ## Model Selection
 
 Use `Refresh models`, select a candidate, then run `Vision self-test`. For sorting large libraries, run `Benchmark` on several visible models and save the best result into the classifier profile.
@@ -34,5 +53,6 @@ For the first pass over a large mixed library:
 
 - `Vision self-test` fails: verify that the model supports image inputs.
 - `/v1/models` is empty: confirm that the LM Studio server is running and the base URL is correct.
+- `401 Unauthorized`: LM Studio authentication is enabled; paste the active API token into the app or set `PHOTO_AI_SORTER_API_KEY`.
 - Requests time out: reduce workers in the profile or choose a smaller model.
 - Too many folders appear: add aliases and re-run with `Smart auto categories`.

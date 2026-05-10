@@ -7,6 +7,12 @@ import requests
 from app import lm_studio
 
 
+def test_normalize_api_base_accepts_endpoint_prefixes() -> None:
+    assert lm_studio.normalize_api_base("http://host:1234/v1") == "http://host:1234"
+    assert lm_studio.normalize_api_base("http://host:1234/api/v1") == "http://host:1234"
+    assert lm_studio.normalize_api_base("http://host:1234/") == "http://host:1234"
+
+
 def test_empty_api_key_omits_authorization_header() -> None:
     assert "Authorization" not in lm_studio._auth_headers_json("")
     assert lm_studio._auth_headers_get("") == {}

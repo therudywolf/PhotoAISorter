@@ -61,6 +61,17 @@ PHOTO_AI_SORTER_API_KEY=your-local-key
 PHOTO_AI_SORTER_MODEL=local-model
 ```
 
+For your LM Studio setup you can also create a local `.env.local` next to `run.bat`.
+It is ignored by git:
+
+```bash
+PHOTO_AI_SORTER_API_BASE=http://10.77.77.2:29931
+PHOTO_AI_SORTER_API_KEY=your-lm-studio-token
+```
+
+The GUI also has an `API key` field. That value is stored under the app data
+directory, not inside the repository.
+
 ## Manual Setup
 
 ```bash

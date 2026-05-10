@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import customtkinter as ctk
 
-from app.constants import DEFAULT_API_BASE, DEFAULT_API_KEY, DEFAULT_MODEL, GIF_EXTENSION, MediaScanMode, VIDEO_EXTENSIONS
+from app.constants import DEFAULT_API_BASE, DEFAULT_MODEL, GIF_EXTENSION, MediaScanMode, VIDEO_EXTENSIONS
 from app.duplicate_finder import (
     DuplicateFinderOptions,
     load_records_from_db,
@@ -670,7 +670,7 @@ class DuplicatesPane(ctk.CTkFrame):
         def work() -> None:
             self.after(0, lambda: self._set_dup_probe_busy(True))
             try:
-                models = list_models(base)
+                models = list_models(base, api_key=self._app._api_key_resolved())
             except Exception as e:
                 self.after(0, lambda: self._app._append_log(f"Дубликаты — список моделей: ошибка {e!s}"))
                 self.after(0, lambda: self._set_dup_probe_busy(False))
@@ -818,7 +818,7 @@ class DuplicatesPane(ctk.CTkFrame):
             self._dup_queue,
             api_base=dup_api,
             model=dup_model,
-            api_key=DEFAULT_API_KEY,
+            api_key=self._app._api_key_resolved(),
         )
         self._app._append_log(
             f"Дубликаты: API={dup_api} | модель={dup_model} | LLM={'ON' if opts.use_llm_pairs else 'OFF'}"
@@ -1735,7 +1735,7 @@ class DuplicatesPane(ctk.CTkFrame):
                         ub,
                         api_base=api,
                         model=model,
-                        api_key=DEFAULT_API_KEY,
+                        api_key=self._app._api_key_resolved(),
                         on_retry=lambda x: self._app._append_log(x),
                     )
                 except Exception as e:
