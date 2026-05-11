@@ -169,11 +169,17 @@ def build_classification_system_prompt(
     free_mode: bool = False,
     auto_mode: bool = False,
     general_mode: bool = False,
+    custom_categories: tuple[str, ...] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> str:
     """Системный текст: базовые правила + приоритеты + определения по тегам + USER_CONTEXT."""
-    tag_keys: tuple[str, ...] = GENERAL_CATEGORIES if general_mode else CATEGORIES
+    if custom_categories:
+        tag_keys = custom_categories
+    elif general_mode:
+        tag_keys = GENERAL_CATEGORIES
+    else:
+        tag_keys = CATEGORIES
     if auto_mode:
         header = (
             "You are a local backend automated tagging script. Create stable short lowercase categories. "
@@ -192,6 +198,12 @@ def build_classification_system_prompt(
             "Use a preset tag from the list below ONLY when it is the best literal match; "
             "do NOT pick a preset just because its name appears inside your reasoning. "
             "When in doubt, output a new specific hierarchical path."
+        )
+    elif custom_categories:
+        header = (
+            "You are a local backend automated tagging script. You have no conversational ability. "
+            "Your ONLY job is to output a single exact string from this custom user-defined list: "
+            f"{', '.join(tag_keys)}."
         )
     elif general_mode:
         header = (
@@ -221,18 +233,28 @@ def build_classification_system_prompt(
         output_rule,
         "Do not write long reasoning. If you must think, put only the final answer after it.",
         "",
-        PRIORITY_RULES_BLOCK,
-        "",
-        "Definitions (tag: meaning):" if not (auto_mode or free_mode) else "Reference definitions (optional, not a whitelist):",
     ]
+    if not custom_categories:
+        parts.append(PRIORITY_RULES_BLOCK)
+        parts.append("")
+    if auto_mode or free_mode:
+        parts.append("Reference definitions (optional, not a whitelist):")
+    elif custom_categories:
+        parts.append("User-defined categories (use exactly these tags):")
+    else:
+        parts.append("Definitions (tag: meaning):")
     reference_keys = GENERAL_CATEGORIES if (auto_mode or free_mode) else tag_keys
     for cat in reference_keys:
-        parts.append(f"{cat}: {CATEGORY_PROMPTS[cat]}")
+        desc = CATEGORY_PROMPTS.get(cat, cat.replace("_", " "))
+        parts.append(f"{cat}: {desc}")
     parts.append("")
-    parts.append(
-        "User context for recognition (personal_user_sfw, personal_user_nsfw, my_dog): "
-        f"{user_context}"
-    )
+    if user_context.strip():
+        parts.append(
+            "User context for recognition (match these descriptions to identify personal subjects):\n"
+            f"{user_context}"
+        )
+    else:
+        parts.append("User context: not provided. Skip personal_user_* and my_dog tags.")
     if prompt_extra.strip():
         parts.append("")
         parts.append("Extra prompt settings:")
@@ -386,6 +408,7 @@ def build_messages(
     free_mode: bool = False,
     auto_mode: bool = False,
     general_mode: bool = False,
+    custom_categories: tuple[str, ...] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
@@ -395,6 +418,7 @@ def build_messages(
         free_mode=free_mode,
         auto_mode=auto_mode,
         general_mode=general_mode,
+        custom_categories=custom_categories,
         prompt_extra=prompt_extra,
         structured_output=structured_output,
     )
@@ -429,6 +453,7 @@ def build_messages_multi(
     free_mode: bool = False,
     auto_mode: bool = False,
     general_mode: bool = False,
+    custom_categories: tuple[str, ...] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
@@ -438,6 +463,7 @@ def build_messages_multi(
         free_mode=free_mode,
         auto_mode=auto_mode,
         general_mode=general_mode,
+        custom_categories=custom_categories,
         prompt_extra=prompt_extra,
         structured_output=structured_output,
     )
@@ -476,6 +502,7 @@ def _chat_completion_once(
     free_mode: bool,
     auto_mode: bool,
     general_mode: bool,
+    custom_categories: tuple[str, ...] | None = None,
     prompt_extra: str,
     structured_output: bool,
     temperature: float,
@@ -491,6 +518,7 @@ def _chat_completion_once(
             free_mode=free_mode,
             auto_mode=auto_mode,
             general_mode=general_mode,
+            custom_categories=custom_categories,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
         ),
@@ -529,6 +557,7 @@ def _chat_completion_multi_once(
     free_mode: bool,
     auto_mode: bool,
     general_mode: bool,
+    custom_categories: tuple[str, ...] | None = None,
     prompt_extra: str,
     structured_output: bool,
     temperature: float,
@@ -546,6 +575,7 @@ def _chat_completion_multi_once(
             free_mode=free_mode,
             auto_mode=auto_mode,
             general_mode=general_mode,
+            custom_categories=custom_categories,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
         ),
@@ -585,6 +615,7 @@ def chat_completion_multi(
     free_mode: bool = False,
     auto_mode: bool = False,
     general_mode: bool = False,
+    custom_categories: tuple[str, ...] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
     temperature: float = 0.2,
@@ -603,6 +634,7 @@ def chat_completion_multi(
             free_mode=free_mode,
             auto_mode=auto_mode,
             general_mode=general_mode,
+            custom_categories=custom_categories,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
             temperature=temperature,
@@ -626,6 +658,7 @@ def classify_frames(
     free_mode: bool = False,
     auto_mode: bool = False,
     general_mode: bool = False,
+    custom_categories: tuple[str, ...] | None = None,
     prompt_extra: str = "",
 ) -> str:
     """
@@ -656,6 +689,7 @@ def classify_frames(
                 free_mode=free_mode,
                 auto_mode=auto_mode,
                 general_mode=general_mode,
+                custom_categories=custom_categories,
                 prompt_extra=prompt_extra,
             )
             if auto_mode:
@@ -695,6 +729,7 @@ def classify_frames(
                     free_mode=free_mode,
                     auto_mode=auto_mode,
                     general_mode=general_mode,
+                    custom_categories=custom_categories,
                     prompt_extra=prompt_extra,
                 )
                 if auto_mode:
@@ -719,6 +754,7 @@ def classify_frames(
                     free_mode=free_mode,
                     auto_mode=auto_mode,
                     general_mode=general_mode,
+                    custom_categories=custom_categories,
                     prompt_extra=prompt_extra,
                 )
                 if auto_mode:
@@ -745,6 +781,7 @@ def classify_frames(
                 free_mode=free_mode,
                 auto_mode=auto_mode,
                 general_mode=general_mode,
+                custom_categories=custom_categories,
                 prompt_extra=prompt_extra,
             )
             if auto_mode:
@@ -780,6 +817,7 @@ def chat_completion(
     free_mode: bool = False,
     auto_mode: bool = False,
     general_mode: bool = False,
+    custom_categories: tuple[str, ...] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
     temperature: float = 0.2,
@@ -801,6 +839,7 @@ def chat_completion(
             free_mode=free_mode,
             auto_mode=auto_mode,
             general_mode=general_mode,
+            custom_categories=custom_categories,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
             temperature=temperature,
@@ -1033,55 +1072,6 @@ def unload_duplicate_model_instances(
                 continue
             unloaded.append(unload_model_instance(api_base, instance_id, api_key=api_key, timeout=timeout))
     return unloaded
-
-
-def benchmark_models(
-    api_base: str,
-    models: list[str],
-    *,
-    api_key: str | None = None,
-    limit: int = 8,
-    timeout: tuple[float, float] | None = None,
-    on_progress: Callable[[str], None] | None = None,
-) -> list[dict[str, Any]]:
-    """Lightweight vision probe benchmark for choosing an LM Studio model."""
-    from app.images import vision_test_card_data_uri
-
-    uri = vision_test_card_data_uri()
-    out: list[dict[str, Any]] = []
-    selected = [m for m in models if m][: max(1, limit)]
-    for model in selected:
-        t0 = time.monotonic()
-        ok = False
-        detail = ""
-        if on_progress:
-            on_progress(f"benchmark {model}: start")
-        try:
-            text = vision_probe_completion(
-                uri,
-                api_base=api_base,
-                model=model,
-                api_key=api_key,
-                timeout=timeout or (API_PROBE_TIMEOUT_SEC, VISION_TEST_TIMEOUT_SEC),
-            )
-            low = text.lower()
-            ok = bool(text.strip()) and any(w in low for w in ("red", "green", "blue", "square", "circle", "triangle", "shape"))
-            detail = text[:180]
-        except Exception as e:
-            detail = str(e)[:180]
-        latency = max(0.001, time.monotonic() - t0)
-        score = (100.0 / latency if ok else 0.0) + (25.0 if ok and "shape" in detail.lower() else 0.0)
-        row = {
-            "model": model,
-            "ok": ok,
-            "latency_sec": round(latency, 3),
-            "score": round(score, 3),
-            "detail": detail,
-        }
-        out.append(row)
-        if on_progress:
-            on_progress(f"benchmark {model}: {'OK' if ok else 'FAIL'} {latency:.2f}s")
-    return sorted(out, key=lambda r: (-float(r["score"]), float(r["latency_sec"]), str(r["model"]).lower()))
 
 
 def vision_hint_from_model_dict(obj: dict[str, Any]) -> bool | None:

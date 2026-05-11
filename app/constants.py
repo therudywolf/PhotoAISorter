@@ -75,8 +75,6 @@ GENERAL_CATEGORIES: tuple[str, ...] = (*CATEGORIES, *GENERAL_EXTRA_CATEGORIES)
 FURRY_CATEGORY_WHITELIST: frozenset[str] = frozenset(CATEGORIES)
 GENERAL_CATEGORY_WHITELIST: frozenset[str] = frozenset(GENERAL_CATEGORIES)
 
-# Backwards-compatible name: same as furry preset (strict matching).
-CATEGORY_WHITELIST: frozenset[str] = FURRY_CATEGORY_WHITELIST
 CANONICAL_CATEGORY_WHITELIST: frozenset[str] = frozenset(CANONICAL_CATEGORIES)
 
 UNCATEGORIZED = "uncategorized"
@@ -104,15 +102,15 @@ PRIORITY 7 — Everything else: human_real_sfw, human_ai_gen_sfw, real_animals, 
 # Описание для каждого тега (редактируйте здесь)
 CATEGORY_PROMPTS: dict[str, str] = {
     "personal_user_sfw": (
-        "The app owner, safe-for-work only. Match USER_CONTEXT (e.g. male, 195cm, blonde hair, blue eyes). "
+        "The app owner, safe-for-work only. Match USER_CONTEXT description. "
         "No nudity or explicit sexual content."
     ),
     "personal_user_nsfw": (
-        "The app owner, NSFW or nudity. Strong trigger: black wolf paw with forest tattoo on the right side of the stomach; "
-        "also match USER_CONTEXT when clearly the same person."
+        "The app owner, NSFW or nudity. Match USER_CONTEXT description "
+        "when clearly the same person."
     ),
     "my_dog": (
-        "The owner's specific dog. Match USER_CONTEXT: Black Labrador. Not generic real_animals."
+        "The owner's specific dog/pet. Match USER_CONTEXT description. Not generic real_animals."
     ),
     "puppy_play": (
         "Puppy play / pet play kink: gear or roleplay (hoods, collars, bone tags, etc.), any intensity; use when theme is central."
@@ -154,7 +152,7 @@ CATEGORY_PROMPTS: dict[str, str] = {
         "Vehicles and racing: cars, bikes, motorsport, driving POV, car meets."
     ),
     "real_animals": (
-        "Real animals in photos; not anthropomorphic art; not the Black Labrador (my_dog)."
+        "Real animals in photos; not anthropomorphic art; not the owner's pet (my_dog, see USER_CONTEXT)."
     ),
     "memes_and_screenshots": (
         "Text-heavy images, UI screenshots, memes, social media captures."
@@ -287,9 +285,6 @@ VIDEO_EXTENSIONS: frozenset[str] = frozenset(
 
 GIF_EXTENSION = ".gif"
 
-# Обратная совместимость: всё, что считаем «фото» для whitelist расширений в старом коде
-IMAGE_EXTENSIONS: frozenset[str] = STILL_IMAGE_EXTENSIONS
-
 VIDEO_FRAME_COUNT = 3
 
 # ffmpeg: папка ffmpeg-runtime/bin рядом с проектом (run.bat добавляет в PATH) или
@@ -379,8 +374,6 @@ JPEG_QUALITY = 85
 
 REQUEST_CONNECT_TIMEOUT_SEC = 30.0
 REQUEST_READ_TIMEOUT_SEC = 600.0
-REQUEST_TIMEOUT_SEC = 600.0
-
 API_MAX_RETRIES = 5
 API_RETRY_BACKOFF_SEC: tuple[float, ...] = (1.5, 3.0, 5.0, 8.0)
 
@@ -393,8 +386,6 @@ VISION_PROBE_MAX_TOKENS = 512
 DEFAULT_MODEL = os.environ.get("PHOTO_AI_SORTER_MODEL", "local-model").strip() or "local-model"
 
 LOG_MAX_LINES = 500
-
-PARALLEL_WORKERS = 3  # file I/O threads; API concurrency controlled separately by api_workers
 
 ETA_ROLLING_WINDOW = 20
 

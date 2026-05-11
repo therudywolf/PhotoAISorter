@@ -65,11 +65,6 @@ def iter_media_files(root: Path, mode: MediaScanMode) -> list[Path]:
     return out
 
 
-def iter_image_files(root: Path) -> list[Path]:
-    """Совместимость: только фото (статичные расширения)."""
-    return iter_media_files(root, MediaScanMode.PHOTOS_ONLY)
-
-
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -128,6 +123,7 @@ class SortWorker:
         free_tag_mode: bool = False,
         auto_tag_mode: bool = False,
         general_tag_mode: bool = False,
+        custom_categories: tuple[str, ...] | None = None,
         prompt_extra: str = "",
         structured_output: bool = True,
         review_first: bool = False,
@@ -149,6 +145,7 @@ class SortWorker:
         self.free_tag_mode = bool(free_tag_mode)
         self.auto_tag_mode = bool(auto_tag_mode)
         self.general_tag_mode = bool(general_tag_mode)
+        self.custom_categories = tuple(custom_categories) if custom_categories else None
         self.prompt_extra = str(prompt_extra or "")
         self.structured_output = bool(structured_output)
         self.review_first = bool(review_first)
@@ -574,6 +571,7 @@ class SortWorker:
                             free_mode=self.free_tag_mode,
                             auto_mode=self.auto_tag_mode,
                             general_mode=self.general_tag_mode,
+                            custom_categories=self.custom_categories,
                             prompt_extra=prompt_extra,
                             structured_output=True,
                             temperature=self.temperature,
@@ -607,6 +605,7 @@ class SortWorker:
                             free_mode=self.free_tag_mode,
                             auto_mode=self.auto_tag_mode,
                             general_mode=self.general_tag_mode,
+                            custom_categories=self.custom_categories,
                             prompt_extra=f"{base_prompt}\n\nVIDEO MODE: This is one representative frame from a video.".strip(),
                             structured_output=True,
                             temperature=self.temperature,
@@ -746,6 +745,7 @@ class SortWorker:
                                             free_mode=self.free_tag_mode or self.auto_tag_mode,
                                             auto_mode=self.auto_tag_mode,
                                             general_mode=self.general_tag_mode,
+                                            custom_categories=self.custom_categories,
                                             prompt_extra=_prompt_for_request(),
                                         )
                                     )
@@ -764,6 +764,7 @@ class SortWorker:
                                     free_mode=self.free_tag_mode or self.auto_tag_mode,
                                     auto_mode=self.auto_tag_mode,
                                     general_mode=self.general_tag_mode,
+                                    custom_categories=self.custom_categories,
                                     prompt_extra=_prompt_for_request(),
                                     structured_output=self.structured_output,
                                     temperature=self.temperature,

@@ -20,14 +20,6 @@ class ModelProfile:
     prompt_extra: str = ""
 
 
-DEFAULT_PROFILE_NAMES: tuple[str, ...] = (
-    "classifier",
-    "duplicate_verifier",
-    "screenshot_ocr",
-    "fast_preview",
-)
-
-
 def default_profiles(api_base: str, model: str) -> dict[str, ModelProfile]:
     base = str(api_base or "").strip()
     mid = str(model or "").strip()

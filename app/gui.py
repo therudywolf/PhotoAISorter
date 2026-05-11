@@ -6,14 +6,13 @@ import queue
 import threading
 import tkinter.filedialog as filedialog
 import tkinter.messagebox as messagebox
-import json
 from pathlib import Path
-from typing import Callable
 
 import customtkinter as ctk
 
 from app.cache_service import CacheService
-from app.category_aliases import load_category_aliases, save_category_aliases, normalize_aliases
+from app.category_aliases import load_category_aliases
+from app.context_tags import build_user_context_from_tags, load_context_tags
 from app.constants import (
     CANONICAL_CATEGORIES,
     DEFAULT_API_BASE,
@@ -32,12 +31,11 @@ from app.signature_db import SignatureDatabase
 from app.task_state import TaskState
 from app.ui_texts import t
 from app.lm_studio import (
-    benchmark_models,
     full_api_self_test,
     list_models,
     loaded_model_instances,
 )
-from app.video_frames import diagnose_media_decode, resolve_ffmpeg_executable
+from app.video_frames import resolve_ffmpeg_executable
 from app.worker import SortWorker
 
 
@@ -84,6 +82,7 @@ _TAG_MODE_LABELS = {
     "strict": "Furry",
     "auto": "Авто",
     "free": "Свободно",
+    "custom": "Свой список",
 }
 _TAG_MODE_VALUES = {v: k for k, v in _TAG_MODE_LABELS.items()}
 
@@ -144,10 +143,8 @@ class App(ctk.CTk):
         self._media_mode_label_var = ctk.StringVar(
             value=_MEDIA_MODE_LABELS.get(mm, _MEDIA_MODE_LABELS[MediaScanMode.PHOTOS_ONLY.value])
         )
-        self._sort_workers_var = ctk.StringVar(value="3")
-        self._api_workers_var = ctk.StringVar(value="1")
         _saved_mode = str(saved.get("tag_mode", "") or "").strip()
-        if _saved_mode not in {"strict", "general", "free", "auto"}:
+        if _saved_mode not in {"strict", "general", "free", "auto", "custom"}:
             _saved_free = bool(saved.get("free_tag_mode", False))
             _saved_mode = "free" if _saved_free else "strict"
         self._tag_mode_var = ctk.StringVar(value=_saved_mode)
@@ -163,10 +160,7 @@ class App(ctk.CTk):
         if self._cache_clear_on_start:
             self._cache_service.clear_all()
             self._append_log("Кеш очищен при запуске (по настройке).")
-        ctx = str(saved.get("user_context", "") or "")
-        if ctx:
-            self._context.delete("1.0", "end")
-            self._context.insert("1.0", ctx)
+        self._refresh_context_display()
         self._in_var.trace_add("write", lambda *_: self._update_start_state())
         self._out_var.trace_add("write", lambda *_: self._update_start_state())
         self._media_mode_var.trace_add("write", lambda *_: self.after(0, self._on_media_mode_value_changed))
@@ -240,13 +234,6 @@ class App(ctk.CTk):
             text_color=("gray35", "gray60"),
         )
         self._ffmpeg_hint.pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(
-            row_ff,
-            text=t("video.diagnose"),
-            width=150,
-            fg_color=("gray75", "gray30"),
-            command=self._on_video_diagnose,
-        ).pack(side="right", padx=(8, 0))
 
         _section_label(folders, t("folders.tag_mode.section"))
         row_tag_mode = ctk.CTkFrame(folders, fg_color="transparent")
@@ -299,13 +286,7 @@ class App(ctk.CTk):
             textvariable=self._api_key_var,
             show="*",
             placeholder_text="LM Studio token; хранится локально, не в git",
-        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ctk.CTkButton(
-            row_key,
-            text="Сохранить ключ",
-            width=150,
-            command=self._save_lm_secret_clicked,
-        ).pack(side="right")
+        ).pack(side="left", fill="x", expand=True)
 
         row_m = ctk.CTkFrame(lm, fg_color="transparent")
         row_m.pack(fill="x", padx=8, pady=(0, 4))
@@ -343,18 +324,11 @@ class App(ctk.CTk):
         self._profile_combo.pack(side="left", padx=(0, 8))
         self._btn_profile_save = ctk.CTkButton(
             row_profile,
-            text=t("lm.profile.save"),
-            width=150,
-            command=self._save_current_model_profile,
+            text="Профили…",
+            width=120,
+            command=self._open_profile_manager,
         )
-        self._btn_profile_save.pack(side="left", padx=(0, 8))
-        self._btn_benchmark = ctk.CTkButton(
-            row_profile,
-            text=t("lm.benchmark"),
-            width=150,
-            command=self._on_benchmark_models,
-        )
-        self._btn_benchmark.pack(side="left")
+        self._btn_profile_save.pack(side="left")
 
         row_vis = ctk.CTkFrame(lm, fg_color="transparent")
         row_vis.pack(fill="x", padx=8, pady=(0, 8))
@@ -376,10 +350,18 @@ class App(ctk.CTk):
         )
         self._btn_loaded_models.pack(side="left")
 
-        ctk.CTkLabel(P, text="Контекст для ИИ (USER_CONTEXT):", anchor="w").pack(anchor="w", padx=12)
-        self._context = ctk.CTkTextbox(P, height=90)
+        ctx_row = ctk.CTkFrame(P, fg_color="transparent")
+        ctx_row.pack(fill="x", padx=12, pady=(0, 2))
+        ctk.CTkLabel(ctx_row, text="Контекст для ИИ (USER_CONTEXT):", anchor="w").pack(side="left")
+        ctk.CTkButton(
+            ctx_row, text="Теги...", width=80,
+            fg_color=("gray75", "gray30"),
+            command=self._open_context_tags,
+        ).pack(side="right")
+        self._context = ctk.CTkTextbox(P, height=70, state="normal")
         self._context.pack(fill="x", padx=12, pady=(0, 6))
         self._context.insert("1.0", "")
+        self._refresh_context_display()
 
         prompt_box = ctk.CTkFrame(P, fg_color=("gray90", "gray16"), corner_radius=8)
         prompt_box.pack(fill="x", padx=12, pady=(0, 6))
@@ -392,20 +374,6 @@ class App(ctk.CTk):
         ).pack(anchor="w", padx=8)
         self._prompt_extra = ctk.CTkEntry(prompt_box, textvariable=self._prompt_extra_var)
         self._prompt_extra.pack(fill="x", padx=8, pady=(0, 8))
-        prompt_btns = ctk.CTkFrame(prompt_box, fg_color="transparent")
-        prompt_btns.pack(fill="x", padx=8, pady=(0, 8))
-        ctk.CTkButton(
-            prompt_btns,
-            text=t("prompt.composer"),
-            width=180,
-            command=self._open_prompt_composer,
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            prompt_btns,
-            text=t("prompt.aliases"),
-            width=190,
-            command=self._open_category_aliases,
-        ).pack(side="left")
 
         btns = ctk.CTkFrame(P, fg_color="transparent")
         btns.pack(fill="x", **pad)
@@ -439,13 +407,6 @@ class App(ctk.CTk):
             text_color=("gray35", "gray65"),
             font=ctk.CTkFont(size=11),
         ).pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(
-            sort_options,
-            text=t("sort.review.open"),
-            width=115,
-            fg_color=("gray75", "gray30"),
-            command=self._open_sort_review_manifest,
-        ).pack(side="right", padx=(12, 0))
         self._btn_clear_cache = ctk.CTkButton(
             sort_options,
             text=t("buttons.clear_cache"),
@@ -526,6 +487,8 @@ class App(ctk.CTk):
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_auto"))
         elif mode == "general":
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_general"))
+        elif mode == "custom":
+            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_custom"))
         else:
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_strict"))
 
@@ -538,6 +501,10 @@ class App(ctk.CTk):
         elif mode == "general":
             win.title(t("folders.tags.dialog_title_general"))
             categories = GENERAL_CATEGORIES
+        elif mode == "custom":
+            win.title("Свой список категорий")
+            store = load_context_tags()
+            categories = tuple(store.custom_lists[0].categories) if store.custom_lists else ()
         else:
             win.title(t("folders.tags.dialog_title_reference"))
             categories = GENERAL_CATEGORIES
@@ -564,8 +531,6 @@ class App(ctk.CTk):
         self._btn_clear_cache.configure(state="disabled" if busy or self._running else "normal")
         if hasattr(self, "_btn_loaded_models"):
             self._btn_loaded_models.configure(state="disabled" if busy else "normal")
-        if hasattr(self, "_btn_benchmark"):
-            self._btn_benchmark.configure(state=st)
         if hasattr(self, "_btn_profile_save"):
             self._btn_profile_save.configure(state="disabled" if busy or self._running else "normal")
         if hasattr(self, "_chk_review_first"):
@@ -583,18 +548,48 @@ class App(ctk.CTk):
         if self._probe_busy:
             messagebox.showwarning(t("cache.warn_busy"), t("cache.warn_probe_wait"))
             return
-        try:
-            choice = messagebox.askyesnocancel(t("cache.ask.title"), t("cache.ask.text"))
-            if choice is True:
+
+        win = ctk.CTkToplevel(self)
+        win.title(t("cache.ask.title"))
+        win.geometry("420x220")
+        win.transient(self)
+        win.grab_set()
+
+        ctk.CTkLabel(
+            win, text="Выберите, что очистить:", font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(padx=16, pady=(16, 12))
+
+        def do_sort() -> None:
+            win.destroy()
+            try:
                 n = self._cache_service.clear_sort_cache()
                 self._append_log(t("cache.log.cleared_sort", count=n))
-            elif choice is False:
+            except OSError as e:
+                messagebox.showerror(t("cache.error"), str(e))
+
+        def do_dup() -> None:
+            win.destroy()
+            try:
                 n = self._cache_service.clear_duplicate_cache()
                 self._append_log(t("cache.log.cleared_dup", count=n))
-            else:
-                self._append_log(t("cache.log.cancelled"))
-        except OSError as e:
-            messagebox.showerror(t("cache.error"), str(e))
+            except OSError as e:
+                messagebox.showerror(t("cache.error"), str(e))
+
+        def do_both() -> None:
+            win.destroy()
+            try:
+                ns = self._cache_service.clear_sort_cache()
+                nd = self._cache_service.clear_duplicate_cache()
+                self._append_log(t("cache.log.cleared_both", sort_count=ns, dup_count=nd))
+            except OSError as e:
+                messagebox.showerror(t("cache.error"), str(e))
+
+        btns = ctk.CTkFrame(win, fg_color="transparent")
+        btns.pack(fill="x", padx=16, pady=(0, 8))
+        ctk.CTkButton(btns, text="Кеш сортировки", width=180, command=do_sort).pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(btns, text="Кеш дубликатов", width=180, command=do_dup).pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(btns, text="Оба кеша", width=180, fg_color="darkred", command=do_both).pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(win, text="Отмена", width=120, fg_color=("gray70", "gray35"), command=win.destroy).pack(pady=(0, 12))
 
     def _update_ffmpeg_hint(self) -> None:
         try:
@@ -621,132 +616,6 @@ class App(ctk.CTk):
                 text_color=("goldenrod", "#c9a227"),
             )
 
-    def _on_video_diagnose(self) -> None:
-        path = filedialog.askopenfilename(
-            title=t("video.diagnose.title"),
-            filetypes=[
-                (
-                    t("video.diagnose.filetypes"),
-                    "*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.3gp *.mts *.m2ts *.mpg *.mpeg",
-                ),
-                ("Все файлы", "*.*"),
-            ],
-        )
-        if not path:
-            return
-
-        def work() -> None:
-            try:
-                report = diagnose_media_decode(Path(path))
-            except Exception as e:
-                self.after(0, lambda: self._append_log(f"Диагностика видео: {e!s}"))
-                return
-            self.after(0, lambda: self._show_video_diagnostic(report))
-
-        threading.Thread(target=work, daemon=True).start()
-        self._append_log(f"Диагностика видео: {path}")
-
-    def _show_video_diagnostic(self, report: dict[str, object]) -> None:
-        lines = [
-            f"Файл: {report.get('path', '')}",
-            f"Существует: {'да' if report.get('exists') else 'нет'}",
-            f"Расширение: {report.get('suffix') or '—'}",
-            f"Размер: {report.get('size_bytes') or '—'} байт",
-            f"ffmpeg: {report.get('ffmpeg') or 'не найден'}",
-            f"ffprobe: {report.get('ffprobe') or 'не найден'}",
-            f"Длительность: {report.get('duration_sec') if report.get('duration_sec') is not None else '—'} сек",
-            f"Кадры: {report.get('decoded_frames')} из {report.get('wanted_frames')}",
-            f"Размеры кадров: {', '.join(report.get('frame_sizes') or []) or '—'}",
-        ]
-        logs = report.get("logs") or []
-        if logs:
-            lines.append("")
-            lines.append("Лог декодирования:")
-            lines.extend(str(x) for x in logs)
-        text = "\n".join(lines)
-        self._append_log(f"Диагностика видео: кадры {report.get('decoded_frames')} из {report.get('wanted_frames')}")
-
-        win = ctk.CTkToplevel(self)
-        win.title(t("video.diagnose.title"))
-        win.geometry("760x520")
-        win.transient(self)
-        tb = ctk.CTkTextbox(win, font=ctk.CTkFont(size=12))
-        tb.pack(fill="both", expand=True, padx=12, pady=(12, 8))
-        tb.insert("1.0", text)
-        tb.configure(state="disabled")
-        ctk.CTkButton(win, text=t("buttons.close"), command=win.destroy).pack(pady=(0, 12))
-
-    def _open_sort_review_manifest(self) -> None:
-        out_dir = Path(self._out_var.get().strip()) if self._out_var.get().strip() else Path.cwd()
-        initial_dir = out_dir / "_review_runs"
-        if not initial_dir.exists():
-            initial_dir = out_dir if out_dir.exists() else Path.cwd()
-        path = filedialog.askopenfilename(
-            title=t("sort.review.pick"),
-            initialdir=str(initial_dir),
-            filetypes=[("Review manifest", "manifest.jsonl"), ("JSONL", "*.jsonl"), ("Все файлы", "*.*")],
-        )
-        if not path:
-            return
-        self._show_sort_review_manifest(Path(path))
-
-    def _show_sort_review_manifest(self, path: Path) -> None:
-        rows: list[dict[str, object]] = []
-        total = 0
-        category_counts: dict[str, int] = {}
-        needs_review = 0
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    total += 1
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(row, dict):
-                        continue
-                    cat = str(row.get("category") or "uncategorized")
-                    category_counts[cat] = category_counts.get(cat, 0) + 1
-                    if bool(row.get("needs_review")):
-                        needs_review += 1
-                    if len(rows) < 1000:
-                        rows.append(row)
-        except OSError as e:
-            messagebox.showerror(t("cache.error"), str(e))
-            return
-
-        lines = [
-            f"Файл: {path}",
-            f"Всего записей: {total}",
-            f"Требуют проверки: {needs_review}",
-            "",
-            "Категории:",
-        ]
-        for cat, count in sorted(category_counts.items(), key=lambda x: (-x[1], x[0]))[:80]:
-            lines.append(f"{count:>6}  {cat}")
-        lines.append("")
-        lines.append("Первые 1000 строк:")
-        for row in rows:
-            source = Path(str(row.get("source_path") or "")).name
-            cat = str(row.get("category") or "")
-            conf = row.get("confidence")
-            review = "review" if bool(row.get("needs_review")) else ""
-            reason = str(row.get("reason_short") or "")[:80]
-            lines.append(f"{cat:<32} {str(conf):<6} {review:<8} {source} {reason}")
-
-        win = ctk.CTkToplevel(self)
-        win.title(t("sort.review.title"))
-        win.geometry("940x680")
-        win.transient(self)
-        tb = ctk.CTkTextbox(win, font=ctk.CTkFont(family="Consolas", size=12))
-        tb.pack(fill="both", expand=True, padx=12, pady=(12, 8))
-        tb.insert("1.0", "\n".join(lines))
-        tb.configure(state="disabled")
-        ctk.CTkButton(win, text=t("buttons.close"), command=win.destroy).pack(pady=(0, 12))
-
     def _save_gui_settings(self) -> None:
         try:
             dup: dict = {}
@@ -765,7 +634,7 @@ class App(ctk.CTk):
                     "free_tag_mode": self._tag_mode_var.get() == "free",
                     "prompt_extra": self._prompt_extra_var.get().strip(),
                     "review_first_sort": bool(self._review_first_var.get()),
-                    "user_context": self._context.get("1.0", "end").strip(),
+                    "user_context": build_user_context_from_tags(load_context_tags()),
                     "cache_settings": {
                         "clear_on_start": self._cache_clear_on_start,
                         "dup_force_recompute_default": self._dup_force_recompute_default,
@@ -776,13 +645,6 @@ class App(ctk.CTk):
             save_secret_settings({"lm_studio_api_key": self._api_key_resolved()})
         except OSError:
             pass
-
-    def _save_lm_secret_clicked(self) -> None:
-        try:
-            save_secret_settings({"lm_studio_api_key": self._api_key_resolved()})
-            self._append_log("LM Studio API key сохранён локально в данных приложения (не в репозитории).")
-        except OSError as e:
-            messagebox.showerror(t("cache.error"), str(e))
 
     def _update_start_state(self) -> None:
         ok = bool(self._in_var.get().strip() and self._out_var.get().strip())
@@ -897,102 +759,56 @@ class App(ctk.CTk):
         self._save_gui_settings()
         self._append_log(t("lm.profile.saved", name=name))
 
-    def _on_benchmark_models(self) -> None:
-        base = self._api_var.get().strip() or DEFAULT_API_BASE
-        models = list(self._model_combo.cget("values") or [])
-        models = [m for m in models if isinstance(m, str) and not m.startswith("—")]
-        if not models:
-            self._append_log(t("lm.benchmark.no_models"))
-            return
-
-        def work() -> None:
-            self.after(0, lambda: self._set_probe_busy(True))
-            try:
-                rows = benchmark_models(
-                    base,
-                    models,
-                    api_key=self._api_key_resolved(),
-                    limit=8,
-                    on_progress=lambda msg: self.after(0, lambda m=msg: self._append_log(m)),
-                )
-            except Exception as e:
-                self.after(0, lambda: self._append_log(t("lm.benchmark.error", err=e)))
-                self.after(0, lambda: self._set_probe_busy(False))
-                return
-
-            def apply() -> None:
-                if not rows:
-                    self._append_log(t("lm.benchmark.empty"))
-                else:
-                    best = rows[0]
-                    self._model_manual_var.set(str(best["model"]))
-                    self._append_log(
-                        t(
-                            "lm.benchmark.best",
-                            model=best["model"],
-                            latency=best["latency_sec"],
-                            score=best["score"],
-                        )
-                    )
-                    self._save_current_model_profile()
-                self._set_probe_busy(False)
-
-            self.after(0, apply)
-
-        threading.Thread(target=work, daemon=True).start()
-        self._append_log(t("lm.benchmark.start", n=len(models)))
-
-    def _open_prompt_composer(self) -> None:
+    def _open_profile_manager(self) -> None:
         win = ctk.CTkToplevel(self)
-        win.title(t("prompt.composer.title"))
-        win.geometry("720x560")
+        win.title("Профили моделей")
+        win.geometry("680x460")
         win.transient(self)
-        ctk.CTkLabel(win, text=t("prompt.composer.context"), anchor="w").pack(anchor="w", padx=12, pady=(12, 4))
-        ctx = ctk.CTkTextbox(win, height=160)
-        ctx.pack(fill="x", padx=12, pady=(0, 8))
-        ctx.insert("1.0", self._context.get("1.0", "end").strip())
-        ctk.CTkLabel(win, text=t("prompt.composer.extra"), anchor="w").pack(anchor="w", padx=12, pady=(4, 4))
-        extra = ctk.CTkTextbox(win, height=220)
-        extra.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        extra.insert("1.0", self._prompt_extra_var.get().strip())
+        win.grab_set()
 
-        def apply() -> None:
-            self._context.delete("1.0", "end")
-            self._context.insert("1.0", ctx.get("1.0", "end").strip())
-            self._prompt_extra_var.set(extra.get("1.0", "end").strip())
-            self._save_current_model_profile()
-            win.destroy()
+        ctk.CTkLabel(
+            win, text="Сохранённые профили", font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(padx=12, pady=(12, 6))
 
-        row = ctk.CTkFrame(win, fg_color="transparent")
-        row.pack(fill="x", padx=12, pady=(0, 12))
-        ctk.CTkButton(row, text=t("buttons.close"), command=win.destroy).pack(side="right")
-        ctk.CTkButton(row, text=t("buttons.apply"), command=apply).pack(side="right", padx=(0, 8))
-
-    def _open_category_aliases(self) -> None:
-        aliases = load_category_aliases()
-        win = ctk.CTkToplevel(self)
-        win.title(t("prompt.aliases.title"))
-        win.geometry("620x520")
-        win.transient(self)
-        ctk.CTkLabel(win, text=t("prompt.aliases.hint"), anchor="w", justify="left").pack(fill="x", padx=12, pady=(12, 6))
-        tb = ctk.CTkTextbox(win, height=390)
+        tb = ctk.CTkTextbox(win, height=260, font=ctk.CTkFont(family="Consolas", size=12))
         tb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        tb.insert("1.0", json.dumps(aliases, ensure_ascii=False, indent=2, sort_keys=True))
+
+        def refresh_list() -> None:
+            tb.configure(state="normal")
+            tb.delete("1.0", "end")
+            if not self._model_profiles:
+                tb.insert("1.0", "Нет сохранённых профилей.")
+            else:
+                active = self._active_model_profile_var.get().strip()
+                for name in sorted(self._model_profiles):
+                    p = self._model_profiles[name]
+                    marker = "  ◀ активный" if name == active else ""
+                    tb.insert("end", f"[{name}]{marker}\n")
+                    tb.insert("end", f"  Модель:      {p.model or DEFAULT_MODEL}\n")
+                    tb.insert("end", f"  API base:    {p.api_base or DEFAULT_API_BASE}\n")
+                    tb.insert("end", f"  Temperature: {p.temperature}  Max tokens: {p.max_tokens}  Timeout: {p.timeout_sec}s\n")
+                    if p.prompt_extra:
+                        short = p.prompt_extra[:80] + ("..." if len(p.prompt_extra) > 80 else "")
+                        tb.insert("end", f"  Промпт:      {short}\n")
+                    tb.insert("end", "\n")
+            tb.configure(state="disabled")
+
+        refresh_list()
+
+        row_save = ctk.CTkFrame(win, fg_color="transparent")
+        row_save.pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkLabel(row_save, text="Сохранить текущие настройки как:", anchor="w").pack(side="left", padx=(0, 8))
+        name_var = ctk.StringVar(value=self._active_model_profile_var.get().strip() or "classifier")
+        ctk.CTkEntry(row_save, textvariable=name_var, width=200).pack(side="left", padx=(0, 8))
 
         def save() -> None:
-            try:
-                raw = json.loads(tb.get("1.0", "end").strip() or "{}")
-                save_category_aliases(normalize_aliases(raw))
-            except (OSError, json.JSONDecodeError) as e:
-                messagebox.showerror(t("cache.error"), str(e))
-                return
-            self._append_log(t("prompt.aliases.saved"))
-            win.destroy()
+            self._active_model_profile_var.set(name_var.get().strip() or "classifier")
+            self._save_current_model_profile()
+            refresh_list()
 
-        row = ctk.CTkFrame(win, fg_color="transparent")
-        row.pack(fill="x", padx=12, pady=(0, 12))
-        ctk.CTkButton(row, text=t("buttons.close"), command=win.destroy).pack(side="right")
-        ctk.CTkButton(row, text=t("buttons.save"), command=save).pack(side="right", padx=(0, 8))
+        ctk.CTkButton(row_save, text="Сохранить", width=120, command=save).pack(side="left")
+
+        ctk.CTkButton(win, text="Закрыть", width=120, command=win.destroy).pack(pady=(0, 12))
 
     def _pick_in(self) -> None:
         d = filedialog.askdirectory(title="Папка с файлами для сортировки")
@@ -1089,13 +905,6 @@ class App(ctk.CTk):
         threading.Thread(target=work, daemon=True).start()
         self._append_log("Запуск самотеста API...")
 
-    def _active_requested_models(self) -> set[str]:
-        models = {self._model_resolved()}
-        for worker in self._workers.values():
-            if worker.is_alive():
-                models.add(worker.model)
-        return {m for m in models if m}
-
     def _format_loaded_models(self, rows: list[dict[str, object]]) -> str:
         if not rows:
             return "LM Studio: загруженных моделей не найдено."
@@ -1115,6 +924,21 @@ class App(ctk.CTk):
                     f"(ctx={item.get('context_length')}, parallel={item.get('parallel')}{ttl_txt})"
                 )
         return "\n".join(parts)
+
+    def _refresh_context_display(self) -> None:
+        store = load_context_tags()
+        text = build_user_context_from_tags(store)
+        self._context.configure(state="normal")
+        self._context.delete("1.0", "end")
+        if text:
+            self._context.insert("1.0", text)
+        else:
+            self._context.insert("1.0", "(нет активных тегов — откройте «Теги...» для настройки)")
+        self._context.configure(state="disabled")
+
+    def _open_context_tags(self) -> None:
+        from app.gui_context_tags import ContextTagsDialog
+        ContextTagsDialog(self, on_save=self._refresh_context_display)
 
     def _on_loaded_models(self) -> None:
         base = self._api_var.get().strip() or DEFAULT_API_BASE
@@ -1152,7 +976,7 @@ class App(ctk.CTk):
                 "Внимание: папка результата находится внутри источника; уже лежащие там файлы будут исключены из скана."
             )
 
-        user_context = self._context.get("1.0", "end").strip()
+        user_context = build_user_context_from_tags(load_context_tags())
         api_base = self._api_var.get().strip() or DEFAULT_API_BASE
         model = self._model_resolved()
 
@@ -1194,6 +1018,8 @@ class App(ctk.CTk):
             self._append_log(t("sort.log_mode_general"))
         elif tag_mode == "auto":
             self._append_log(t("sort.log_mode_auto"))
+        elif tag_mode == "custom":
+            self._append_log("Режим папок: пользовательский список категорий.")
         else:
             self._append_log(t("sort.log_mode_free"))
             self._append_log(t("sort.warn_large_library_free"))
@@ -1203,6 +1029,18 @@ class App(ctk.CTk):
         api_workers = 1
         profile = self._active_profile()
         aliases = load_category_aliases()
+
+        custom_cats: tuple[str, ...] | None = None
+        if tag_mode == "custom":
+            from app.context_tags import get_active_custom_list
+            store = load_context_tags()
+            if store.custom_lists:
+                custom_cats = tuple(store.custom_lists[0].categories)
+            if not custom_cats:
+                self._append_log("Ошибка: пользовательский список категорий пуст. Создайте список в «Теги...».")
+                self._set_controls_running(False)
+                return
+
         self._worker = SortWorker(
             self._db,
             self._msg_queue,
@@ -1214,6 +1052,7 @@ class App(ctk.CTk):
             free_tag_mode=tag_mode == "free",
             auto_tag_mode=tag_mode == "auto",
             general_tag_mode=tag_mode == "general",
+            custom_categories=custom_cats,
             structured_output=True,
             review_first=bool(self._review_first_var.get()),
             category_aliases=aliases,

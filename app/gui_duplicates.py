@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import customtkinter as ctk
 
-from app.constants import DEFAULT_API_BASE, DEFAULT_MODEL, GIF_EXTENSION, MediaScanMode, VIDEO_EXTENSIONS
+from app.constants import DEFAULT_API_BASE, DEFAULT_MODEL, MediaScanMode, VIDEO_EXTENSIONS
 from app.duplicate_finder import (
     DuplicateFinderOptions,
     load_records_from_db,
@@ -29,10 +29,9 @@ from app.gui_dup_groups_window import DuplicateGroupsViewer
 from app.duplicate_worker import DuplicateFinderWorker
 from app.settings_store import duplicate_journal_path
 from app.signature_db import SignatureDatabase, make_session_key
-from app.duplicate_worker import path_to_jpeg_data_uri
-from app.lm_studio import list_models, pair_images_duplicate_decision
+from app.lm_studio import list_models
 from app.ui_texts import t as ui_t
-from app.video_frames import is_animated_gif, preview_frame_for_thumbnail, resolve_ffmpeg_executable
+from app.video_frames import resolve_ffmpeg_executable
 
 if TYPE_CHECKING:
     from app.gui import App
@@ -40,8 +39,6 @@ if TYPE_CHECKING:
 ACCURACY_PRESET_KEYS: tuple[str, ...] = ("fast", "balanced", "strict", "deep")
 
 # Large duplicate groups: cap thumbnails per card and paginate the rest in a modal.
-DUP_CARD_THUMB_CAP = 48
-DUP_CARD_THUMB_STEP = 48
 DUP_CARD_MODAL_PAGE = 200
 PERSIST_DEBOUNCE_MS = 350
 # При большем числе файлов удаление выполняется в фоновом потоке, UI обновляется через очередь.
@@ -120,7 +117,6 @@ class DuplicatesPane(ctk.CTkFrame):
         self._group_delete_entire_vars: list[ctk.BooleanVar] = []
         self._group_ids: list[str] = []
         self._last_records_meta: list[dict[str, Any]] = []
-        self._dup_video_logged = False
         self._group_records: list[dict[str, Any]] = []
         self._filtered_indices: list[int] = []
         self._session_key: str | None = None
@@ -149,8 +145,6 @@ class DuplicatesPane(ctk.CTkFrame):
         controls_host.pack(fill="x", **pad)
         self._controls_scroll = ctk.CTkScrollableFrame(controls_host, height=320, fg_color="transparent")
         self._controls_scroll.pack(fill="x", expand=False)
-        self._controls_scroll.bind("<Enter>", lambda _e: setattr(self, "_controls_hover", True))
-        self._controls_scroll.bind("<Leave>", lambda _e: setattr(self, "_controls_hover", False))
         top = ctk.CTkFrame(self._controls_scroll, fg_color=("gray90", "gray16"), corner_radius=8)
         top.pack(fill="x", padx=2, pady=2)
 
@@ -583,8 +577,10 @@ class DuplicatesPane(ctk.CTkFrame):
         self._lbl_review_progress.configure(text=ui_t("dup.approve.progress", approved=approved, total=total))
 
     def _apply_suggested_deletes_wrap(self) -> None:
+        self._approve_all_groups()
         self._apply_suggested_deletes()
         self._refresh_delete_count_and_review_progress()
+        self.after(100, self._preview_delete)
 
     def _after_keep_change(self) -> None:
         for i, km in enumerate(self._group_keep_check_vars):
@@ -957,7 +953,6 @@ class DuplicatesPane(ctk.CTkFrame):
         self._group_ids = []
         self._group_records = []
         self._filtered_indices = []
-        self._dup_video_logged = False
         aid = getattr(self, "_persist_after_id", None)
         if aid is not None:
             try:
@@ -1713,71 +1708,22 @@ class DuplicatesPane(ctk.CTkFrame):
         top.title(ui_t("dup.compare.title"))
         top.geometry("1024x520")
         self._make_modal(top)
-        hint = ctk.CTkLabel(
-            top,
-            text=ui_t("dup.compare.hint"),
+        action_row = ctk.CTkFrame(top, fg_color="transparent")
+        action_row.pack(fill="x", padx=10, pady=(8, 6))
+        ctk.CTkLabel(
+            action_row,
+            text="Визуальное сравнение файлов группы",
             text_color=("gray35", "gray65"),
-            wraplength=980,
             anchor="w",
-        )
-        hint.pack(fill="x", padx=10, pady=(8, 4))
-        ask_row = ctk.CTkFrame(top, fg_color="transparent")
-        ask_row.pack(fill="x", padx=10, pady=(0, 6))
-        res_lbl = ctk.CTkLabel(ask_row, text="", anchor="w", wraplength=900)
-        res_lbl.pack(side="left", padx=(0, 12), fill="x", expand=True)
-
-        def run_ask_model() -> None:
-            res_lbl.configure(text=ui_t("dup.compare.ask_busy"))
-            opts = self._parse_options()
-            vf = int((opts.video_sample_frames if opts else 1) or 1)
-            pa, pb = ordered[0], ordered[1]
-
-            def work() -> None:
-                ua = path_to_jpeg_data_uri(pa, vf, lambda m: self._app._append_log(f"compare: {m}"))
-                ub = path_to_jpeg_data_uri(pb, vf, lambda m: self._app._append_log(f"compare: {m}"))
-                if not ua or not ub:
-
-                    def no_frame() -> None:
-                        res_lbl.configure(text=ui_t("dup.compare.no_frame"))
-
-                    self.after(0, no_frame)
-                    return
-                api = self._dup_api_var.get().strip() or DEFAULT_API_BASE
-                model = self._dup_model_resolved()
-                try:
-                    is_dup = pair_images_duplicate_decision(
-                        ua,
-                        ub,
-                        api_base=api,
-                        model=model,
-                        api_key=self._app._api_key_resolved(),
-                        on_retry=lambda x: self._app._append_log(x),
-                    )
-                except Exception as e:
-
-                    def fail() -> None:
-                        res_lbl.configure(text=ui_t("dup.compare.ask_error", err=str(e)[:120]))
-
-                    self.after(0, fail)
-                    return
-                msg = ui_t("dup.compare.ask_dup") if is_dup else ui_t("dup.compare.ask_not_dup")
-
-                def ok() -> None:
-                    res_lbl.configure(text=msg)
-
-                self.after(0, ok)
-
-            threading.Thread(target=work, daemon=True).start()
-
-        ctk.CTkButton(ask_row, text=ui_t("dup.compare.ask_model"), width=220, command=run_ask_model).pack(side="left")
+        ).pack(side="left", fill="x", expand=True)
         ctk.CTkButton(
-            ask_row,
+            action_row,
             text=ui_t("dup.compare.approve_all"),
             width=160,
             fg_color=CTK_ACCENT_PRIMARY,
             hover_color=CTK_ACCENT_PRIMARY_HOVER,
             command=self._approve_all_groups,
-        ).pack(side="left", padx=(10, 0))
+        ).pack(side="right")
         scroll = ctk.CTkScrollableFrame(top, orientation="horizontal", height=400, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         max_side = min(320, max(160, 900 // max(1, len(ordered))))
