@@ -170,6 +170,7 @@ def build_classification_system_prompt(
     auto_mode: bool = False,
     general_mode: bool = False,
     custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> str:
@@ -243,9 +244,10 @@ def build_classification_system_prompt(
         parts.append("User-defined categories (use exactly these tags):")
     else:
         parts.append("Definitions (tag: meaning):")
+    _cprompts = custom_prompts or {}
     reference_keys = GENERAL_CATEGORIES if (auto_mode or free_mode) else tag_keys
     for cat in reference_keys:
-        desc = CATEGORY_PROMPTS.get(cat, cat.replace("_", " "))
+        desc = _cprompts.get(cat) or CATEGORY_PROMPTS.get(cat, cat.replace("_", " "))
         parts.append(f"{cat}: {desc}")
     parts.append("")
     if user_context.strip():
@@ -409,6 +411,7 @@ def build_messages(
     auto_mode: bool = False,
     general_mode: bool = False,
     custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
@@ -419,6 +422,7 @@ def build_messages(
         auto_mode=auto_mode,
         general_mode=general_mode,
         custom_categories=custom_categories,
+        custom_prompts=custom_prompts,
         prompt_extra=prompt_extra,
         structured_output=structured_output,
     )
@@ -454,6 +458,7 @@ def build_messages_multi(
     auto_mode: bool = False,
     general_mode: bool = False,
     custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
@@ -464,6 +469,7 @@ def build_messages_multi(
         auto_mode=auto_mode,
         general_mode=general_mode,
         custom_categories=custom_categories,
+        custom_prompts=custom_prompts,
         prompt_extra=prompt_extra,
         structured_output=structured_output,
     )
@@ -503,6 +509,7 @@ def _chat_completion_once(
     auto_mode: bool,
     general_mode: bool,
     custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str,
     structured_output: bool,
     temperature: float,
@@ -519,6 +526,7 @@ def _chat_completion_once(
             auto_mode=auto_mode,
             general_mode=general_mode,
             custom_categories=custom_categories,
+            custom_prompts=custom_prompts,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
         ),
@@ -558,6 +566,7 @@ def _chat_completion_multi_once(
     auto_mode: bool,
     general_mode: bool,
     custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str,
     structured_output: bool,
     temperature: float,
@@ -576,6 +585,7 @@ def _chat_completion_multi_once(
             auto_mode=auto_mode,
             general_mode=general_mode,
             custom_categories=custom_categories,
+            custom_prompts=custom_prompts,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
         ),
@@ -616,6 +626,7 @@ def chat_completion_multi(
     auto_mode: bool = False,
     general_mode: bool = False,
     custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
     temperature: float = 0.2,
@@ -635,6 +646,7 @@ def chat_completion_multi(
             auto_mode=auto_mode,
             general_mode=general_mode,
             custom_categories=custom_categories,
+            custom_prompts=custom_prompts,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
             temperature=temperature,
@@ -659,6 +671,7 @@ def classify_frames(
     auto_mode: bool = False,
     general_mode: bool = False,
     custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str = "",
 ) -> str:
     """
@@ -690,6 +703,7 @@ def classify_frames(
                 auto_mode=auto_mode,
                 general_mode=general_mode,
                 custom_categories=custom_categories,
+                custom_prompts=custom_prompts,
                 prompt_extra=prompt_extra,
             )
             if auto_mode:
@@ -730,6 +744,7 @@ def classify_frames(
                     auto_mode=auto_mode,
                     general_mode=general_mode,
                     custom_categories=custom_categories,
+                    custom_prompts=custom_prompts,
                     prompt_extra=prompt_extra,
                 )
                 if auto_mode:
@@ -755,6 +770,7 @@ def classify_frames(
                     auto_mode=auto_mode,
                     general_mode=general_mode,
                     custom_categories=custom_categories,
+                    custom_prompts=custom_prompts,
                     prompt_extra=prompt_extra,
                 )
                 if auto_mode:
@@ -782,6 +798,7 @@ def classify_frames(
                 auto_mode=auto_mode,
                 general_mode=general_mode,
                 custom_categories=custom_categories,
+                custom_prompts=custom_prompts,
                 prompt_extra=prompt_extra,
             )
             if auto_mode:
@@ -818,6 +835,7 @@ def chat_completion(
     auto_mode: bool = False,
     general_mode: bool = False,
     custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
     temperature: float = 0.2,
@@ -840,6 +858,7 @@ def chat_completion(
             auto_mode=auto_mode,
             general_mode=general_mode,
             custom_categories=custom_categories,
+            custom_prompts=custom_prompts,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
             temperature=temperature,

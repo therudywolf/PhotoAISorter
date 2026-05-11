@@ -12,7 +12,13 @@ import customtkinter as ctk
 
 from app.cache_service import CacheService
 from app.category_aliases import load_category_aliases
-from app.context_tags import build_user_context_from_tags, load_context_tags
+from app.context_tags import (
+    build_custom_categories,
+    build_custom_prompts,
+    build_user_context_from_tags,
+    get_active_set,
+    load_tag_store,
+)
 from app.constants import (
     CANONICAL_CATEGORIES,
     DEFAULT_API_BASE,
@@ -503,8 +509,9 @@ class App(ctk.CTk):
             categories = GENERAL_CATEGORIES
         elif mode == "custom":
             win.title("Свой список категорий")
-            store = load_context_tags()
-            categories = tuple(store.custom_lists[0].categories) if store.custom_lists else ()
+            _store = load_tag_store()
+            _aset = get_active_set(_store)
+            categories = build_custom_categories(_aset) if _aset else ()
         else:
             win.title(t("folders.tags.dialog_title_reference"))
             categories = GENERAL_CATEGORIES
@@ -634,7 +641,7 @@ class App(ctk.CTk):
                     "free_tag_mode": self._tag_mode_var.get() == "free",
                     "prompt_extra": self._prompt_extra_var.get().strip(),
                     "review_first_sort": bool(self._review_first_var.get()),
-                    "user_context": build_user_context_from_tags(load_context_tags()),
+                    "user_context": build_user_context_from_tags(get_active_set(load_tag_store())),
                     "cache_settings": {
                         "clear_on_start": self._cache_clear_on_start,
                         "dup_force_recompute_default": self._dup_force_recompute_default,
@@ -926,19 +933,22 @@ class App(ctk.CTk):
         return "\n".join(parts)
 
     def _refresh_context_display(self) -> None:
-        store = load_context_tags()
-        text = build_user_context_from_tags(store)
+        store = load_tag_store()
+        active = get_active_set(store)
+        text = build_user_context_from_tags(active)
         self._context.configure(state="normal")
         self._context.delete("1.0", "end")
-        if text:
-            self._context.insert("1.0", text)
+        if active and text:
+            self._context.insert("1.0", f"[{active.name}]\n{text}")
+        elif active:
+            self._context.insert("1.0", f"[{active.name}] — тегов: {len(active.tags)} (без описаний)")
         else:
-            self._context.insert("1.0", "(нет активных тегов — откройте «Теги...» для настройки)")
+            self._context.insert("1.0", "(нет активного набора — откройте «Теги...»)")
         self._context.configure(state="disabled")
 
     def _open_context_tags(self) -> None:
-        from app.gui_context_tags import ContextTagsDialog
-        ContextTagsDialog(self, on_save=self._refresh_context_display)
+        from app.gui_context_tags import TagSetsDialog
+        TagSetsDialog(self, on_save=self._refresh_context_display)
 
     def _on_loaded_models(self) -> None:
         base = self._api_var.get().strip() or DEFAULT_API_BASE
@@ -976,7 +986,9 @@ class App(ctk.CTk):
                 "Внимание: папка результата находится внутри источника; уже лежащие там файлы будут исключены из скана."
             )
 
-        user_context = build_user_context_from_tags(load_context_tags())
+        _tag_store = load_tag_store()
+        _active_tag_set = get_active_set(_tag_store)
+        user_context = build_user_context_from_tags(_active_tag_set)
         api_base = self._api_var.get().strip() or DEFAULT_API_BASE
         model = self._model_resolved()
 
@@ -1032,12 +1044,10 @@ class App(ctk.CTk):
 
         custom_cats: tuple[str, ...] | None = None
         if tag_mode == "custom":
-            from app.context_tags import get_active_custom_list
-            store = load_context_tags()
-            if store.custom_lists:
-                custom_cats = tuple(store.custom_lists[0].categories)
+            if _active_tag_set and _active_tag_set.tags:
+                custom_cats = build_custom_categories(_active_tag_set)
             if not custom_cats:
-                self._append_log("Ошибка: пользовательский список категорий пуст. Создайте список в «Теги...».")
+                self._append_log("Ошибка: нет активного набора тегов или он пуст. Откройте «Теги...» и настройте.")
                 self._set_controls_running(False)
                 return
 
@@ -1064,6 +1074,8 @@ class App(ctk.CTk):
         )
         prompt_extra = self._prompt_extra_var.get().strip()
         self._worker.prompt_extra = prompt_extra
+        if custom_cats and _active_tag_set:
+            self._worker.custom_prompts = build_custom_prompts(_active_tag_set)
         self._worker.reset_stop()
         self._worker.set_paused(False)
 

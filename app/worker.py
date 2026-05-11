@@ -146,6 +146,7 @@ class SortWorker:
         self.auto_tag_mode = bool(auto_tag_mode)
         self.general_tag_mode = bool(general_tag_mode)
         self.custom_categories = tuple(custom_categories) if custom_categories else None
+        self.custom_prompts: dict[str, str] | None = None
         self.prompt_extra = str(prompt_extra or "")
         self.structured_output = bool(structured_output)
         self.review_first = bool(review_first)
@@ -572,6 +573,7 @@ class SortWorker:
                             auto_mode=self.auto_tag_mode,
                             general_mode=self.general_tag_mode,
                             custom_categories=self.custom_categories,
+                            custom_prompts=self.custom_prompts,
                             prompt_extra=prompt_extra,
                             structured_output=True,
                             temperature=self.temperature,
@@ -606,6 +608,7 @@ class SortWorker:
                             auto_mode=self.auto_tag_mode,
                             general_mode=self.general_tag_mode,
                             custom_categories=self.custom_categories,
+                            custom_prompts=self.custom_prompts,
                             prompt_extra=f"{base_prompt}\n\nVIDEO MODE: This is one representative frame from a video.".strip(),
                             structured_output=True,
                             temperature=self.temperature,
@@ -746,6 +749,7 @@ class SortWorker:
                                             auto_mode=self.auto_tag_mode,
                                             general_mode=self.general_tag_mode,
                                             custom_categories=self.custom_categories,
+                                            custom_prompts=self.custom_prompts,
                                             prompt_extra=_prompt_for_request(),
                                         )
                                     )
@@ -765,6 +769,7 @@ class SortWorker:
                                     auto_mode=self.auto_tag_mode,
                                     general_mode=self.general_tag_mode,
                                     custom_categories=self.custom_categories,
+                                    custom_prompts=self.custom_prompts,
                                     prompt_extra=_prompt_for_request(),
                                     structured_output=self.structured_output,
                                     temperature=self.temperature,

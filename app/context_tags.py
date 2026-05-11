@@ -1,8 +1,14 @@
-"""User-defined context tags for AI classification.
+"""User-defined tag sets for AI classification.
 
-Context tags are named descriptions (e.g. 'my_dog', 'me') that get injected
-into the system prompt so the model can recognize personal subjects.
-Stored locally in context_tags.json alongside other app settings.
+A TagSet is a named collection of tags. Each tag has:
+- key: the output category / folder name
+- description: optional instruction for the model (what to look for)
+
+When a custom TagSet is active, the model uses ONLY those tags as output categories.
+Tags with descriptions get their descriptions injected into the prompt,
+giving the model recognition instructions (e.g. "my_dog: Black Labrador, friendly").
+
+Stored locally in context_tags.json.
 """
 
 from __future__ import annotations
@@ -20,78 +26,108 @@ def _tags_json_path() -> Path:
 
 
 @dataclass
-class ContextTag:
+class Tag:
     key: str
-    label: str
-    description: str
-    enabled: bool = True
+    description: str = ""
 
 
 @dataclass
-class CustomCategoryList:
+class TagSet:
     name: str
-    categories: list[str] = field(default_factory=list)
+    tags: list[Tag] = field(default_factory=list)
 
 
 @dataclass
-class ContextTagStore:
-    tags: list[ContextTag] = field(default_factory=list)
-    custom_lists: list[CustomCategoryList] = field(default_factory=list)
+class TagStore:
+    sets: list[TagSet] = field(default_factory=list)
+    active_set: str = ""
 
 
-def load_context_tags() -> ContextTagStore:
+def load_tag_store() -> TagStore:
     p = _tags_json_path()
     if not p.is_file():
-        return ContextTagStore()
+        return TagStore()
     try:
         raw = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
-            return ContextTagStore()
-        tags = []
-        for t in raw.get("tags", []):
-            if isinstance(t, dict) and t.get("key"):
-                tags.append(ContextTag(
-                    key=str(t["key"]),
-                    label=str(t.get("label", t["key"])),
-                    description=str(t.get("description", "")),
-                    enabled=bool(t.get("enabled", True)),
-                ))
-        custom_lists = []
-        for cl in raw.get("custom_lists", []):
-            if isinstance(cl, dict) and cl.get("name"):
-                custom_lists.append(CustomCategoryList(
-                    name=str(cl["name"]),
-                    categories=[str(c) for c in cl.get("categories", []) if c],
-                ))
-        return ContextTagStore(tags=tags, custom_lists=custom_lists)
+            return TagStore()
+        sets: list[TagSet] = []
+        for s in raw.get("sets", []):
+            if isinstance(s, dict) and s.get("name"):
+                tags = []
+                for t in s.get("tags", []):
+                    if isinstance(t, dict) and t.get("key"):
+                        tags.append(Tag(
+                            key=str(t["key"]).strip(),
+                            description=str(t.get("description", "")).strip(),
+                        ))
+                    elif isinstance(t, str) and t.strip():
+                        tags.append(Tag(key=t.strip()))
+                sets.append(TagSet(name=str(s["name"]), tags=tags))
+        # Backward compat: migrate old format (separate tags + custom_lists)
+        if not sets and "tags" in raw:
+            migrated_tags = []
+            for t in raw.get("tags", []):
+                if isinstance(t, dict) and t.get("key"):
+                    migrated_tags.append(Tag(
+                        key=str(t["key"]),
+                        description=str(t.get("description", "")),
+                    ))
+            if migrated_tags:
+                sets.append(TagSet(name="Мои теги", tags=migrated_tags))
+            for cl in raw.get("custom_lists", []):
+                if isinstance(cl, dict) and cl.get("name"):
+                    cl_tags = [Tag(key=c) for c in cl.get("categories", []) if c]
+                    if cl_tags:
+                        sets.append(TagSet(name=str(cl["name"]), tags=cl_tags))
+        active = str(raw.get("active_set", "")).strip()
+        return TagStore(sets=sets, active_set=active)
     except (OSError, json.JSONDecodeError):
-        return ContextTagStore()
+        return TagStore()
 
 
-def save_context_tags(store: ContextTagStore) -> None:
+def save_tag_store(store: TagStore) -> None:
     p = _tags_json_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     data: dict[str, Any] = {
-        "tags": [asdict(t) for t in store.tags],
-        "custom_lists": [asdict(cl) for cl in store.custom_lists],
+        "sets": [asdict(s) for s in store.sets],
+        "active_set": store.active_set,
     }
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(p)
 
 
-def build_user_context_from_tags(store: ContextTagStore) -> str:
-    """Format enabled context tags into a text block for the system prompt."""
+def get_active_set(store: TagStore) -> TagSet | None:
+    """Return the currently active TagSet, or None if none selected."""
+    for s in store.sets:
+        if s.name == store.active_set:
+            return s
+    return None
+
+
+def build_custom_categories(tag_set: TagSet) -> tuple[str, ...]:
+    """Extract category keys from a TagSet (the whitelist for the model)."""
+    return tuple(t.key for t in tag_set.tags if t.key)
+
+
+def build_custom_prompts(tag_set: TagSet) -> dict[str, str]:
+    """Build category->description map from a TagSet (for the system prompt)."""
+    return {t.key: t.description for t in tag_set.tags if t.key and t.description}
+
+
+def build_user_context_from_tags(tag_set: TagSet | None) -> str:
+    """Format tag descriptions into USER_CONTEXT block for the system prompt."""
+    if not tag_set:
+        return ""
     lines: list[str] = []
-    for tag in store.tags:
-        if tag.enabled and tag.description.strip():
+    for tag in tag_set.tags:
+        if tag.description.strip():
             lines.append(f"{tag.key}: {tag.description.strip()}")
     return "\n".join(lines)
 
 
-def get_active_custom_list(store: ContextTagStore, name: str) -> list[str] | None:
-    """Return category list by name, or None if not found."""
-    for cl in store.custom_lists:
-        if cl.name == name:
-            return cl.categories
-    return None
+# Legacy compatibility aliases
+def load_context_tags():
+    """Legacy: returns a TagStore (renamed from ContextTagStore)."""
+    return load_tag_store()
