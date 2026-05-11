@@ -164,7 +164,11 @@ class DuplicatesPane(ctk.CTkFrame):
         row_m = ctk.CTkFrame(top, fg_color="transparent")
         row_m.pack(fill="x", padx=8, pady=2)
         ctk.CTkLabel(row_m, text=ui_t("dup.media"), width=70, anchor="w").pack(side="left")
-        for val, label in ((MediaScanMode.PHOTOS_ONLY.value, ui_t("dup.media.photos")), (MediaScanMode.PHOTOS_AND_VIDEO.value, ui_t("dup.media.photos_video"))):
+        for val, label in (
+            (MediaScanMode.PHOTOS_ONLY.value, ui_t("dup.media.photos")),
+            (MediaScanMode.PHOTOS_AND_VIDEO.value, ui_t("dup.media.photos_video")),
+            (MediaScanMode.VIDEO_ONLY.value, ui_t("dup.media.video_only")),
+        ):
             ctk.CTkRadioButton(row_m, text=label, variable=self._media_mode_var, value=val).pack(side="left", padx=(0, 12))
 
         _dup_section_label(top, ui_t("dup.section.accuracy"))
@@ -720,7 +724,7 @@ class DuplicatesPane(ctk.CTkFrame):
         if folder:
             self._dir_var.set(folder)
         mm = str(dup.get("media_mode", "") or "")
-        if mm in {MediaScanMode.PHOTOS_ONLY.value, MediaScanMode.PHOTOS_AND_VIDEO.value}:
+        if mm in {m.value for m in MediaScanMode}:
             self._media_mode_var.set(mm)
         preset = str(dup.get("preset", "balanced") or "balanced")
         keys = list(ACCURACY_PRESET_KEYS)
@@ -1680,6 +1684,13 @@ class DuplicatesPane(ctk.CTkFrame):
         # Navigation up is implicit in native scroll; keep key for parity.
         return
 
+    def _approve_all_groups(self) -> None:
+        for v in self._group_approved_vars:
+            v.set(True)
+        self._persist_review_state()
+        self._refresh_delete_count_and_review_progress()
+        self.after(0, self._refresh_virtualized_groups)
+
     def _compare_group(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._group_records):
             return
@@ -1755,6 +1766,14 @@ class DuplicatesPane(ctk.CTkFrame):
             threading.Thread(target=work, daemon=True).start()
 
         ctk.CTkButton(ask_row, text=ui_t("dup.compare.ask_model"), width=220, command=run_ask_model).pack(side="left")
+        ctk.CTkButton(
+            ask_row,
+            text=ui_t("dup.compare.approve_all"),
+            width=160,
+            fg_color=CTK_ACCENT_PRIMARY,
+            hover_color=CTK_ACCENT_PRIMARY_HOVER,
+            command=self._approve_all_groups,
+        ).pack(side="left", padx=(10, 0))
         scroll = ctk.CTkScrollableFrame(top, orientation="horizontal", height=400, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         max_side = min(320, max(160, 900 // max(1, len(ordered))))
@@ -1805,7 +1824,7 @@ class DuplicatesPane(ctk.CTkFrame):
         if not isinstance(prof, dict):
             return
         mm = str(prof.get("media_mode", ""))
-        if mm in {MediaScanMode.PHOTOS_ONLY.value, MediaScanMode.PHOTOS_AND_VIDEO.value}:
+        if mm in {m.value for m in MediaScanMode}:
             self._media_mode_var.set(mm)
         self._workers_var.set(str(max(1, min(4, int(prof.get("parallel_workers", 3) or 3)))))
         self._force_recompute_var.set(bool(prof.get("force_recompute", False)))

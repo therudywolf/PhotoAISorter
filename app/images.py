@@ -30,10 +30,13 @@ def file_sha256(path: Path) -> str:
 
 
 def _pil_to_rgb(im: Image.Image) -> Image.Image:
-    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+    # GIF/PNG palette: через RGBA — стабильнее, чем прямой P→RGB (альфа, подложка).
+    if im.mode == "P":
+        im = im.convert("RGBA")
+    if im.mode in ("RGBA", "LA"):
         im = im.convert("RGBA")
         background = Image.new("RGB", im.size, (255, 255, 255))
-        alpha = im.split()[-1] if im.mode == "RGBA" else None
+        alpha = im.split()[-1]
         background.paste(im, mask=alpha)
         return background
     return im.convert("RGB")

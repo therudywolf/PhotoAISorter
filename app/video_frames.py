@@ -21,9 +21,24 @@ from app.constants import (
     VIDEO_SAMPLE_FRACTIONS,
 )
 
+# Максимум кадров за один проход извлечения (сортировщик сам передаёт VIDEO_FRAME_COUNT;
+# поиск дубликатов может запрашивать больше — их нельзя безусловно резать до 3).
+_MEDIA_EXTRACT_FRAME_CAP = 24
+
 LogFn = Callable[[str], None]
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+_WIN_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+
+
+def _subprocess_run_common_kw() -> dict[str, object]:
+    """Windows + GUI: без консольного окна у дочерних ffmpeg/ffprobe."""
+    if _WIN_NO_CONSOLE:
+        return {"creationflags": _WIN_NO_CONSOLE}
+    return {}
+
+
 _FRAME_CACHE: OrderedDict[tuple[str, int], list[Image.Image]] = OrderedDict()
 _FRAME_CACHE_LIMIT = 96
 
@@ -143,6 +158,7 @@ def ffprobe_duration_sec(path: Path, on_log: LogFn = _noop_log) -> float | None:
             text=True,
             timeout=60,
             check=False,
+            **_subprocess_run_common_kw(),
         )
         if r.returncode != 0 or not r.stdout.strip():
             on_log(f"rollback: ffprobe duration failed ({r.returncode})")
@@ -180,6 +196,7 @@ def _ffmpeg_frame_at(path: Path, t_sec: float, ffmpeg: str) -> Image.Image | Non
             capture_output=True,
             timeout=FFMPEG_FRAME_TIMEOUT_SEC,
             check=False,
+            **_subprocess_run_common_kw(),
         )
         if r.returncode != 0 or not r.stdout:
             return None
@@ -281,7 +298,7 @@ def extract_frames_for_classification(
     Return up to n PIL images (RGB-capable) with fallbacks:
     GIF: Pillow; video: ffmpeg then opencv; shorten list if fewer frames decoded.
     """
-    n = max(1, min(n, VIDEO_FRAME_COUNT))
+    n = max(1, min(int(n), _MEDIA_EXTRACT_FRAME_CAP))
     suf = path.suffix.lower()
 
     if suf == GIF_EXTENSION:

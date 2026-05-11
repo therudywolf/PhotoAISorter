@@ -40,7 +40,12 @@ def path_to_jpeg_data_uri(path: Path, video_frames: int, on_log) -> str | None:
         if suf in VIDEO_EXTENSIONS:
             frames = extract_frames_reduced(path, max(1, video_frames), on_log=on_log)
             return pil_image_to_jpeg_data_uri(frames[0]) if frames else None
-    except OSError:
+    except Exception as e:
+        if callable(on_log):
+            try:
+                on_log(f"jpeg preview error {path.name}: {e!s}")
+            except Exception:
+                pass
         return None
     return None
 
