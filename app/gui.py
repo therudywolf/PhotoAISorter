@@ -123,6 +123,10 @@ class App(ctk.CTk):
             mm = MediaScanMode.PHOTOS_ONLY.value
         self._media_mode_var = ctk.StringVar(value=mm)
         self._sort_workers_var = ctk.StringVar(value=str(saved.get("sort_workers", 3) or 3))
+        saved_api_workers = str(saved.get("api_workers", 1) or 1)
+        if saved_api_workers not in {"1", "2", "3", "4"}:
+            saved_api_workers = "1"
+        self._api_workers_var = ctk.StringVar(value=saved_api_workers)
         _saved_mode = str(saved.get("tag_mode", "") or "").strip()
         if _saved_mode not in {"strict", "general", "free", "auto"}:
             _saved_free = bool(saved.get("free_tag_mode", False))
@@ -212,6 +216,20 @@ class App(ctk.CTk):
         row_w.pack(fill="x", padx=8, pady=(0, 6))
         ctk.CTkLabel(row_w, text=t("folders.speed"), width=220, anchor="w").pack(side="left")
         ctk.CTkComboBox(row_w, values=["1", "2", "3", "4"], variable=self._sort_workers_var, width=90, state="readonly").pack(side="left")
+        ctk.CTkLabel(row_w, text=t("folders.api_workers"), width=190, anchor="w").pack(side="left", padx=(18, 4))
+        ctk.CTkComboBox(row_w, values=["1", "2", "3", "4"], variable=self._api_workers_var, width=90, state="readonly").pack(side="left")
+
+        row_w_hint = ctk.CTkFrame(folders, fg_color="transparent")
+        row_w_hint.pack(fill="x", padx=8, pady=(0, 6))
+        ctk.CTkLabel(
+            row_w_hint,
+            text=t("folders.api_workers.hint"),
+            anchor="w",
+            justify="left",
+            wraplength=820,
+            font=ctk.CTkFont(size=11),
+            text_color=("gray35", "gray65"),
+        ).pack(anchor="w")
 
         row_ff = ctk.CTkFrame(folders, fg_color="transparent")
         row_ff.pack(fill="x", padx=8, pady=(0, 4))
@@ -227,18 +245,18 @@ class App(ctk.CTk):
         _section_label(folders, t("folders.tag_mode.section"))
         row_tag_mode = ctk.CTkFrame(folders, fg_color="transparent")
         row_tag_mode.pack(fill="x", padx=8, pady=(0, 4))
-        for val, label_key in (
+        for idx, (val, label_key) in enumerate((
             ("strict", "folders.tag_mode.strict_radio"),
             ("general", "folders.tag_mode.general_radio"),
             ("auto", "folders.tag_mode.auto_radio"),
             ("free", "folders.tag_mode.free_radio"),
-        ):
+        )):
             ctk.CTkRadioButton(
                 row_tag_mode,
                 text=t(label_key),
                 variable=self._tag_mode_var,
                 value=val,
-            ).pack(side="left", padx=(0, 16))
+            ).grid(row=idx // 2, column=idx % 2, sticky="w", padx=(0, 22), pady=(0, 6))
         row_tag_btns = ctk.CTkFrame(folders, fg_color="transparent")
         row_tag_btns.pack(fill="x", padx=8, pady=(0, 4))
         ctk.CTkButton(
@@ -252,6 +270,7 @@ class App(ctk.CTk):
             text="",
             anchor="w",
             justify="left",
+            wraplength=820,
             text_color=("gray35", "gray65"),
             font=ctk.CTkFont(size=11),
         )
@@ -468,12 +487,20 @@ class App(ctk.CTk):
 
     def _show_canonical_tags_dialog(self) -> None:
         win = ctk.CTkToplevel(self)
-        win.title(t("folders.tags.dialog_title"))
+        mode = self._tag_mode_var.get()
+        if mode == "strict":
+            win.title(t("folders.tags.dialog_title_furry"))
+            categories = CANONICAL_CATEGORIES
+        elif mode == "general":
+            win.title(t("folders.tags.dialog_title_general"))
+            categories = GENERAL_CATEGORIES
+        else:
+            win.title(t("folders.tags.dialog_title_reference"))
+            categories = GENERAL_CATEGORIES
         win.geometry("480x520")
         win.transient(self)
         tb = ctk.CTkTextbox(win, font=ctk.CTkFont(size=12))
         tb.pack(fill="both", expand=True, padx=12, pady=(12, 8))
-        categories = GENERAL_CATEGORIES if self._tag_mode_var.get() == "general" else CANONICAL_CATEGORIES
         tb.insert("1.0", _format_tag_list_for_display(categories))
         tb.configure(state="disabled")
         ctk.CTkButton(win, text=t("buttons.close"), command=win.destroy).pack(pady=(0, 12))
@@ -633,6 +660,7 @@ class App(ctk.CTk):
                     "model_profiles": profiles_to_settings(self._model_profiles),
                     "media_mode": self._media_mode_var.get().strip(),
                     "sort_workers": self._sort_workers_var.get().strip(),
+                    "api_workers": self._api_workers_var.get().strip(),
                     "tag_mode": self._tag_mode_var.get(),
                     "free_tag_mode": self._tag_mode_var.get() == "free",
                     "prompt_extra": self._prompt_extra_var.get().strip(),
@@ -1069,6 +1097,8 @@ class App(ctk.CTk):
         self._save_gui_settings()
 
         workers = max(1, min(4, int(self._sort_workers_var.get().strip() or "3")))
+        api_workers = max(1, min(4, int(self._api_workers_var.get().strip() or "1")))
+        self._append_log(f"Потоки файлов: {workers}; одновременных запросов к LM: {api_workers}.")
         profile = self._active_profile()
         aliases = load_category_aliases()
         self._worker = SortWorker(
@@ -1078,6 +1108,7 @@ class App(ctk.CTk):
             model=model,
             api_key=self._api_key_resolved(),
             workers=workers,
+            api_workers=api_workers,
             free_tag_mode=tag_mode == "free",
             auto_tag_mode=tag_mode == "auto",
             general_tag_mode=tag_mode == "general",
@@ -1205,6 +1236,7 @@ class App(ctk.CTk):
                     calls=payload.get("api_calls", 0),
                     avg=payload.get("avg_api_sec", 0),
                     errors=payload.get("api_errors", 0),
+                    api_workers=payload.get("api_workers", self._api_workers_var.get()),
                     review=payload.get("needs_review", 0),
                 )
             )

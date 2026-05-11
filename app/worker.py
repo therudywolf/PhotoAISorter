@@ -119,6 +119,7 @@ class SortWorker:
         model: str,
         api_key: str | None = None,
         workers: int = 3,
+        api_workers: int = 1,
         free_tag_mode: bool = False,
         auto_tag_mode: bool = False,
         general_tag_mode: bool = False,
@@ -138,6 +139,7 @@ class SortWorker:
         self.model = model
         self.api_key = api_key if api_key is not None else DEFAULT_API_KEY
         self.workers = max(1, min(4, int(workers)))
+        self.api_workers = max(1, min(4, int(api_workers)))
         self.free_tag_mode = bool(free_tag_mode)
         self.auto_tag_mode = bool(auto_tag_mode)
         self.general_tag_mode = bool(general_tag_mode)
@@ -256,6 +258,7 @@ class SortWorker:
                 return {
                     "model": self.model,
                     "workers": self.workers,
+                    "api_workers": self.api_workers,
                     "structured_output": self.structured_output,
                     "prompt_extra": self.prompt_extra,
                     "auto_tag_mode": self.auto_tag_mode,
@@ -313,6 +316,28 @@ class SortWorker:
             error_times: deque[float] = deque()
             storm_guard_until = 0.0
             storm_lock = threading.Lock()
+            api_slots = threading.BoundedSemaphore(self.api_workers)
+            if self.workers > self.api_workers:
+                self._emit(
+                    {
+                        "type": "log",
+                        "text": (
+                            f"Файловых потоков: {self.workers}; одновременных запросов к LM: {self.api_workers}. "
+                            "Это безопаснее для LM Studio, который часто нестабилен при параллельных vision-запросах."
+                        ),
+                    }
+                )
+
+            def _run_api_call(fn: Callable[[], str]) -> str:
+                while not self._stop.is_set():
+                    if api_slots.acquire(timeout=0.1):
+                        break
+                else:
+                    raise RuntimeError("stopped before API request")
+                try:
+                    return fn()
+                finally:
+                    api_slots.release()
 
             def _register_api_error(exc: Exception) -> None:
                 nonlocal storm_guard_until
@@ -360,7 +385,7 @@ class SortWorker:
                 with prog_lock:
                     done += 1
                     rem = total - done
-                    workers_eff = max(1, min(self.workers, rem)) if rem > 0 else 1
+                    workers_eff = max(1, min(self.workers, self.api_workers, rem)) if rem > 0 else 1
                     eta_sec = (rem * avg) / workers_eff if rem > 0 and durations else 0.0
                     self._emit(
                         {
@@ -415,6 +440,7 @@ class SortWorker:
                             "avg_api_sec": round(avg, 2),
                             "last_api_sec": round(last_api_sec or 0.0, 2),
                             "api_errors": metrics["api_errors"],
+                            "api_workers": self.api_workers,
                             "needs_review": metrics["needs_review"],
                             "review_written": metrics["review_written"],
                         },
@@ -535,38 +561,42 @@ class SortWorker:
                                 uris = [pil_image_to_jpeg_data_uri(im) for im in frames]
                                 api_t0 = time.monotonic()
                                 if self.structured_output:
-                                    raw = chat_completion_multi(
-                                        uris[:VIDEO_FRAME_COUNT],
-                                        user_context,
-                                        api_base=self.api_base,
-                                        model=self.model,
-                                        api_key=self.api_key,
-                                        timeout=_timeout(),
-                                        on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                                        free_mode=self.free_tag_mode or self.auto_tag_mode,
-                                        auto_mode=self.auto_tag_mode,
-                                        general_mode=self.general_tag_mode,
-                                        prompt_extra=_prompt_for_request(),
-                                        structured_output=True,
-                                        temperature=self.temperature,
-                                        max_tokens=self.max_tokens,
+                                    raw = _run_api_call(
+                                        lambda: chat_completion_multi(
+                                            uris[:VIDEO_FRAME_COUNT],
+                                            user_context,
+                                            api_base=self.api_base,
+                                            model=self.model,
+                                            api_key=self.api_key,
+                                            timeout=_timeout(),
+                                            on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
+                                            free_mode=self.free_tag_mode or self.auto_tag_mode,
+                                            auto_mode=self.auto_tag_mode,
+                                            general_mode=self.general_tag_mode,
+                                            prompt_extra=_prompt_for_request(),
+                                            structured_output=True,
+                                            temperature=self.temperature,
+                                            max_tokens=self.max_tokens,
+                                        )
                                     )
                                     result = _result_from_raw(raw)
                                     category = result.category
                                 else:
-                                    category = classify_frames(
-                                        uris,
-                                        user_context,
-                                        api_base=self.api_base,
-                                        model=self.model,
-                                        api_key=self.api_key,
-                                        timeout=_timeout(),
-                                        on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                                        on_log=lambda m: self._emit({"type": "log", "text": m}),
-                                        free_mode=self.free_tag_mode or self.auto_tag_mode,
-                                        auto_mode=self.auto_tag_mode,
-                                        general_mode=self.general_tag_mode,
-                                        prompt_extra=_prompt_for_request(),
+                                    category = _run_api_call(
+                                        lambda: classify_frames(
+                                            uris,
+                                            user_context,
+                                            api_base=self.api_base,
+                                            model=self.model,
+                                            api_key=self.api_key,
+                                            timeout=_timeout(),
+                                            on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
+                                            on_log=lambda m: self._emit({"type": "log", "text": m}),
+                                            free_mode=self.free_tag_mode or self.auto_tag_mode,
+                                            auto_mode=self.auto_tag_mode,
+                                            general_mode=self.general_tag_mode,
+                                            prompt_extra=_prompt_for_request(),
+                                        )
                                     )
                                     result = ClassificationResult(category, [category], 0.75, "legacy_video_output", category == UNCATEGORIZED, "")
                                 api_sec = time.monotonic() - api_t0
@@ -576,21 +606,23 @@ class SortWorker:
                         else:
                             data_uri = image_to_jpeg_base64_data_uri(path)
                             api_t0 = time.monotonic()
-                            raw = chat_completion(
-                                data_uri,
-                                user_context,
-                                api_base=self.api_base,
-                                model=self.model,
-                                api_key=self.api_key,
-                                timeout=_timeout(),
-                                on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                                free_mode=self.free_tag_mode or self.auto_tag_mode,
-                                auto_mode=self.auto_tag_mode,
-                                general_mode=self.general_tag_mode,
-                                prompt_extra=_prompt_for_request(),
-                                structured_output=self.structured_output,
-                                temperature=self.temperature,
-                                max_tokens=self.max_tokens,
+                            raw = _run_api_call(
+                                lambda: chat_completion(
+                                    data_uri,
+                                    user_context,
+                                    api_base=self.api_base,
+                                    model=self.model,
+                                    api_key=self.api_key,
+                                    timeout=_timeout(),
+                                    on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
+                                    free_mode=self.free_tag_mode or self.auto_tag_mode,
+                                    auto_mode=self.auto_tag_mode,
+                                    general_mode=self.general_tag_mode,
+                                    prompt_extra=_prompt_for_request(),
+                                    structured_output=self.structured_output,
+                                    temperature=self.temperature,
+                                    max_tokens=self.max_tokens,
+                                )
                             )
                             api_sec = time.monotonic() - api_t0
                             metrics["api_calls"] += 1

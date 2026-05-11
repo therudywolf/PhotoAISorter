@@ -47,6 +47,15 @@ def test_normalize_tag_free_exact_preset_still_works() -> None:
     assert normalize_tag_free("human_real_sfw") == "human_real_sfw"
 
 
+def test_normalize_tag_free_prefers_final_tag_line_after_plain_reasoning() -> None:
+    raw = "The image appears to be a workstation, so I will use a desk tag.\nfinal: tech/desk/monitors"
+    assert normalize_tag_free(raw) == "tech/desk/monitors"
+
+
+def test_normalize_tag_free_rejects_plain_prose_without_tag() -> None:
+    assert normalize_tag_free("The image appears to be a workstation with multiple monitors.") == UNCATEGORIZED
+
+
 def test_legacy_alias_human_group_is_canonicalized() -> None:
     assert normalize_tag("human_nsfw_group") == "human_real_nsfw_female"
 
@@ -71,6 +80,11 @@ def test_strict_furry_preset_rejects_general_only_tag() -> None:
 def test_normalize_tag_auto_does_not_substring_force_preset() -> None:
     raw = "tech/desk/monitors\nexplanation mentions human_real_sfw"
     assert normalize_tag_auto(raw) == "tech/desk"
+
+
+def test_normalize_tag_auto_skips_plain_reasoning_before_final_candidate() -> None:
+    raw = "The image shows a modified car at night.\nvehicles/bmw"
+    assert normalize_tag_auto(raw) == "vehicles/bmw"
 
 
 def test_normalize_tag_auto_picks_most_frequent_candidate() -> None:

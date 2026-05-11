@@ -2,6 +2,8 @@
 
 from pathlib import Path
 from queue import Queue
+import threading
+import time
 
 from app.constants import MediaScanMode, PIPELINE_VERSION
 from app.db import Database, make_sort_session_key
@@ -30,8 +32,12 @@ def test_sort_worker_clamps_workers_1_to_4(tmp_path: Path) -> None:
     q = Queue()
     w0 = SortWorker(db, q, api_base="http://x", model="m", workers=0)
     w9 = SortWorker(db, q, api_base="http://x", model="m", workers=9)
+    a0 = SortWorker(db, q, api_base="http://x", model="m", api_workers=0)
+    a9 = SortWorker(db, q, api_base="http://x", model="m", api_workers=9)
     assert w0.workers == 1
     assert w9.workers == 4
+    assert a0.api_workers == 1
+    assert a9.api_workers == 4
     db.close()
 
 
@@ -96,6 +102,62 @@ def test_sort_worker_auto_mode_chooses_popular_candidate(tmp_path: Path, monkeyp
     w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
 
     assert (dst / "nature" / "forest" / "a.jpg").exists()
+    db.close()
+
+
+def test_sort_worker_general_mode_accepts_extended_preset(tmp_path: Path, monkeypatch: object) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    f = src / "a.jpg"
+    f.write_bytes(b"fake")
+
+    monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr(
+        "app.worker.chat_completion",
+        lambda *_a, **_k: '{"primary_category": "coding_ide_and_terminal", "confidence": 0.91}',
+    )
+
+    db = Database(tmp_path / "state.sqlite3")
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=1, general_tag_mode=True)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
+
+    assert (dst / "coding_ide_and_terminal" / "a.jpg").exists()
+    db.close()
+
+
+def test_sort_worker_serializes_lm_requests_when_api_workers_is_one(tmp_path: Path, monkeypatch: object) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    for i in range(4):
+        (src / f"{i}.jpg").write_bytes(f"fake-{i}".encode("ascii"))
+
+    state = {"active": 0, "max_active": 0}
+    lock = threading.Lock()
+
+    def fake_chat(*_a: object, **_k: object) -> str:
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+        time.sleep(0.05)
+        with lock:
+            state["active"] -= 1
+        return '{"primary_category": "vehicles_and_racing", "confidence": 0.9}'
+
+    monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+
+    db = Database(tmp_path / "state.sqlite3")
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=4, api_workers=1)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.PHOTOS_ONLY)
+
+    assert state["max_active"] == 1
+    assert len(list((dst / "vehicles_and_racing").glob("*.jpg"))) == 4
     db.close()
 
 

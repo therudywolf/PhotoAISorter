@@ -25,6 +25,12 @@ _LEGACY_TAG_ALIASES: dict[str, str] = {
 _FREE_SANITIZE_RE = re.compile(r"[^a-z0-9_/\-\s]+")
 _FREE_SPACES_DASH_RE = re.compile(r"[\s\-]+")
 _FREE_UNDERSCORE_RE = re.compile(r"_+")
+_TAG_LABEL_RE = re.compile(
+    r"(?is)^\s*(?:primary_category|category|tag|label|final(?:\s+tag)?|answer)\s*[:=-]\s*(.+?)\s*$"
+)
+_PROSE_WORD_RE = re.compile(
+    r"\b(?:because|contains|image|looks|photo|picture|shows|there|this|visible|would)\b"
+)
 _AUTO_SPLIT_RE = re.compile(r"[\n,;|]+")
 _AUTO_WEAK_SEGMENTS: frozenset[str] = frozenset(
     {
@@ -139,6 +145,28 @@ def _canonical_tag(tag: str) -> str:
     return _LEGACY_TAG_ALIASES.get(tag, tag)
 
 
+def _strip_candidate_label(text: str) -> str:
+    candidate = str(text or "").strip().strip("`\"'")
+    m = _TAG_LABEL_RE.match(candidate)
+    if m:
+        candidate = m.group(1).strip().strip("`\"'")
+    return candidate
+
+
+def _looks_like_tag_candidate(text: str) -> bool:
+    candidate = _strip_candidate_label(text).lower()
+    if not candidate or len(candidate) > 160:
+        return False
+    if any(ch in candidate for ch in "{}[]:"):
+        return False
+    has_separator = any(ch in candidate for ch in ("/", "_", "-"))
+    if not has_separator and " " in candidate:
+        return False
+    if _PROSE_WORD_RE.search(candidate) and not has_separator:
+        return False
+    return bool(re.search(r"[a-z0-9]", candidate))
+
+
 def _whitelist_by_len_desc(whitelist: frozenset[str]) -> tuple[str, ...]:
     if whitelist is FURRY_CATEGORY_WHITELIST:
         return _WHITELIST_BY_LEN_FURRY
@@ -153,12 +181,12 @@ def normalize_tag_exact(raw: str | None, *, whitelist: frozenset[str]) -> str:
         return UNCATEGORIZED
     raw_clean = _strip_thinking_sections(raw)
     raw_source = raw_clean or raw
-    tag = raw_source.strip().lower()
+    tag = _strip_candidate_label(raw_source).lower()
     if tag.startswith("`") and tag.endswith("`"):
         tag = tag[1:-1].strip()
     if tag in whitelist:
         return _canonical_tag(tag)
-    lines = [ln.strip().lower() for ln in raw_source.splitlines() if ln.strip()]
+    lines = [_strip_candidate_label(ln).lower() for ln in raw_source.splitlines() if ln.strip()]
     if lines:
         if lines[0] in whitelist:
             return _canonical_tag(lines[0])
@@ -173,12 +201,12 @@ def normalize_tag(raw: str | None, *, whitelist: frozenset[str] | None = None) -
     wl = FURRY_CATEGORY_WHITELIST if whitelist is None else whitelist
     raw_clean = _strip_thinking_sections(raw)
     raw_source = raw_clean or raw
-    tag = raw_source.strip().lower()
+    tag = _strip_candidate_label(raw_source).lower()
     if tag.startswith("`") and tag.endswith("`"):
         tag = tag[1:-1].strip()
     if tag in wl:
         return _canonical_tag(tag)
-    lines = [ln.strip().lower() for ln in raw_source.splitlines() if ln.strip()]
+    lines = [_strip_candidate_label(ln).lower() for ln in raw_source.splitlines() if ln.strip()]
     if lines:
         if lines[0] in wl:
             return _canonical_tag(lines[0])
@@ -195,9 +223,9 @@ def normalize_tag(raw: str | None, *, whitelist: frozenset[str] | None = None) -
 def _safe_hierarchical_tag(raw: str | None, *, whitelist: frozenset[str] | None = None) -> str:
     if not raw:
         return UNCATEGORIZED
-    txt = _strip_thinking_sections(raw).strip().lower()
+    txt = _strip_candidate_label(_strip_thinking_sections(raw)).strip().lower()
     if not txt:
-        txt = raw.strip().lower()
+        txt = _strip_candidate_label(raw).strip().lower()
     txt = txt.replace("`", " ")
     # Keep hierarchy delimiters while normalizing each segment safely.
     txt = _FREE_SANITIZE_RE.sub(" ", txt)
@@ -323,6 +351,15 @@ def normalize_tag_free(
     base = normalize_tag_exact(raw, whitelist=wl)
     if raw and base != UNCATEGORIZED:
         return base
+    cleaned = _strip_thinking_sections(raw or "")
+    lines = [ln for ln in cleaned.splitlines() if ln.strip()]
+    for line in reversed(lines):
+        if _looks_like_tag_candidate(line):
+            candidate = _safe_hierarchical_tag(_strip_candidate_label(line), whitelist=wl)
+            if candidate != UNCATEGORIZED:
+                return candidate
+    if lines:
+        return UNCATEGORIZED
     return _safe_hierarchical_tag(raw, whitelist=wl)
 
 
@@ -345,6 +382,8 @@ def normalize_tag_auto(
     cleaned = _strip_thinking_sections(raw).lower()
     candidates: list[str] = []
     for chunk in _AUTO_SPLIT_RE.split(cleaned):
+        if not _looks_like_tag_candidate(chunk):
+            continue
         candidate = _optimized_auto_tag(chunk, extra_aliases, whitelist=swl)
         if candidate != UNCATEGORIZED:
             candidates.append(candidate)

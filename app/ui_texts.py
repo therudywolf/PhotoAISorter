@@ -12,7 +12,12 @@ TEXTS: dict[str, str] = {
     "folders.output": "Папка для результата:",
     "folders.pick": "Выбрать...",
     "folders.process": "Что обрабатывать:",
-    "folders.speed": "Скорость обработки (потоков):",
+    "folders.speed": "Файловых потоков:",
+    "folders.api_workers": "ИИ-запросов одновременно:",
+    "folders.api_workers.hint": (
+        "Для LM Studio обычно безопаснее 1: несколько файлов могут готовиться параллельно, "
+        "но vision-запрос к локальной модели идёт по одному. Увеличивайте только если сервер реально держит параллельные запросы."
+    ),
     "folders.tag_mode.section": "Режим тегов",
     "folders.tag_mode.strict_radio": "Furry — фиксированные теги",
     "folders.tag_mode.general_radio": "Общий — расширенный пресет",
@@ -35,7 +40,9 @@ TEXTS: dict[str, str] = {
         "Автокатегории: модель может предложить новые стабильные папки; "
         "новые ветки проходят через стабилизатор (синонимы, ограничение глубины)."
     ),
-    "folders.tags.dialog_title": "Пресет Furry — канонический список папок",
+    "folders.tags.dialog_title_furry": "Пресет Furry — канонический список папок",
+    "folders.tags.dialog_title_general": "Пресет Общий — список папок",
+    "folders.tags.dialog_title_reference": "Справочник тегов — не whitelist для Auto/Free",
     "sort.log_mode_strict": "Режим папок: Furry (фиксированный список тегов).",
     "sort.log_mode_general": "Режим папок: Общий (furry + расширенный фиксированный список).",
     "sort.log_mode_auto": "Режим папок: Автокатегории (модель предлагает новые стабильные папки).",
@@ -91,7 +98,7 @@ TEXTS: dict[str, str] = {
     "eta.approx": "Осталось примерно: {eta}",
     "eta.counting": "Осталось: считаю...",
     "health.idle": "LM health: —",
-    "health.api": "LM health: запросов {calls}, avg {avg} с, ошибок {errors}, review {review}",
+    "health.api": "LM health: запросов {calls}, avg {avg} с, ошибок {errors}, LM-параллель {api_workers}, review {review}",
     "log.title": "Лог:",
     "cache.warn_busy": "Недоступно",
     "cache.warn_stop_first": "Остановите сортировку перед очисткой кеша.",

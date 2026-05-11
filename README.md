@@ -20,6 +20,7 @@ The app is designed for private local media libraries that may contain personal 
 - Review-first sort manifests under `_review_runs`.
 - Resumable sort sessions with saved progress after stop, crash, or reboot.
 - LM health telemetry in the GUI.
+- Separate file-worker and LM-request concurrency limits. Keep LM requests at `1` for LM Studio unless your server is known to handle parallel vision calls.
 - Hash cache for resumable sorting.
 - Exact and perceptual duplicate detection.
 - Semantic/colorhash duplicate candidates for deep LLM verification.
@@ -105,6 +106,8 @@ Recommended model characteristics:
 - Enough context to process the classification prompt.
 
 Use `Benchmark` after refreshing models to probe the first visible candidates with the built-in vision test card. The best model is written into the active model profile.
+
+For LM Studio stability, start with `ИИ-запросов одновременно = 1`. You may still use several file workers; the app will prepare/hash/copy files in parallel while serializing calls to the local model. Increase the LM-request limit only when the server has multiple reliable model instances or a backend that supports concurrent vision requests.
 
 More setup notes are in [docs/LM_STUDIO.md](docs/LM_STUDIO.md).
 
