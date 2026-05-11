@@ -1,7 +1,7 @@
 """Unit tests for tag normalization and merge."""
 
 from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_auto, normalize_tag_free
-from app.constants import UNCATEGORIZED
+from app.constants import GENERAL_CATEGORY_WHITELIST, UNCATEGORIZED
 
 
 def test_normalize_exact_tag() -> None:
@@ -56,8 +56,21 @@ def test_legacy_alias_cars_is_canonicalized() -> None:
 
 
 def test_normalize_tag_auto_keeps_known_whitelist_tag() -> None:
-    raw = "best guess: vehicles_and_racing, road_trip/night"
+    raw = "vehicles_and_racing, road_trip/night"
     assert normalize_tag_auto(raw) == "vehicles_and_racing"
+
+
+def test_normalize_general_preset_accepts_extended_tag() -> None:
+    assert normalize_tag("pc_build_and_hardware", whitelist=GENERAL_CATEGORY_WHITELIST) == "pc_build_and_hardware"
+
+
+def test_strict_furry_preset_rejects_general_only_tag() -> None:
+    assert normalize_tag("pc_build_and_hardware") == UNCATEGORIZED
+
+
+def test_normalize_tag_auto_does_not_substring_force_preset() -> None:
+    raw = "tech/desk/monitors\nexplanation mentions human_real_sfw"
+    assert normalize_tag_auto(raw) == "tech/desk"
 
 
 def test_normalize_tag_auto_picks_most_frequent_candidate() -> None:

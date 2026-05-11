@@ -22,6 +22,21 @@ def test_retryable_request_error_channel_message() -> None:
     assert lm_studio._retryable_request_error(RuntimeError("Channel Error")) is True
 
 
+def test_extract_assistant_text_strips_closed_think_block() -> None:
+    msg = {"content": "<think>reasoning with human_real_sfw</think>\n{\"primary_category\":\"tech/desk\"}"}
+    assert lm_studio._extract_assistant_text(msg) == '{"primary_category":"tech/desk"}'
+
+
+def test_extract_assistant_text_prefers_final_channel() -> None:
+    msg = {"content": "<|channel|>analysis\nhuman_real_sfw\n<|channel|>final\n{\"primary_category\":\"tech/desk\"}"}
+    assert lm_studio._extract_assistant_text(msg) == '{"primary_category":"tech/desk"}'
+
+
+def test_extract_assistant_text_ignores_unclosed_think_block() -> None:
+    msg = {"content": "<think>\nreasoning only"}
+    assert lm_studio._extract_assistant_text(msg) == ""
+
+
 def test_run_completion_retries_fast_retry_for_channel_error(monkeypatch: object) -> None:
     calls = {"n": 0}
     slept: list[float] = []

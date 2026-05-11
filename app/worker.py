@@ -21,6 +21,7 @@ from app.constants import (
     COPY_FREE_MARGIN_BYTES,
     DEFAULT_API_KEY,
     ETA_ROLLING_WINDOW,
+    GENERAL_CATEGORY_WHITELIST,
     GIF_EXTENSION,
     MediaScanMode,
     PIPELINE_VERSION,
@@ -120,6 +121,7 @@ class SortWorker:
         workers: int = 3,
         free_tag_mode: bool = False,
         auto_tag_mode: bool = False,
+        general_tag_mode: bool = False,
         prompt_extra: str = "",
         structured_output: bool = True,
         review_first: bool = False,
@@ -138,6 +140,7 @@ class SortWorker:
         self.workers = max(1, min(4, int(workers)))
         self.free_tag_mode = bool(free_tag_mode)
         self.auto_tag_mode = bool(auto_tag_mode)
+        self.general_tag_mode = bool(general_tag_mode)
         self.prompt_extra = str(prompt_extra or "")
         self.structured_output = bool(structured_output)
         self.review_first = bool(review_first)
@@ -235,7 +238,11 @@ class SortWorker:
                     )
             total = len(files)
             self._emit({"type": "scan_done", "total": total})
-            tag_mode = "auto" if self.auto_tag_mode else ("free" if self.free_tag_mode else "strict")
+            tag_mode = (
+                "auto"
+                if self.auto_tag_mode
+                else ("free" if self.free_tag_mode else ("general" if self.general_tag_mode else "strict"))
+            )
             session_key = self.session_key or make_sort_session_key(
                 str(source_dir),
                 str(dest_dir),
@@ -253,6 +260,7 @@ class SortWorker:
                     "prompt_extra": self.prompt_extra,
                     "auto_tag_mode": self.auto_tag_mode,
                     "free_tag_mode": self.free_tag_mode,
+                    "general_tag_mode": self.general_tag_mode,
                 }
 
             def save_session(status: str, done_files: int, *, force: bool = False) -> None:
@@ -370,6 +378,8 @@ class SortWorker:
                     return "auto"
                 if self.free_tag_mode:
                     return "free"
+                if self.general_tag_mode:
+                    return "general"
                 return "strict"
 
             def _prompt_for_request() -> str:
@@ -535,6 +545,7 @@ class SortWorker:
                                         on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
                                         free_mode=self.free_tag_mode or self.auto_tag_mode,
                                         auto_mode=self.auto_tag_mode,
+                                        general_mode=self.general_tag_mode,
                                         prompt_extra=_prompt_for_request(),
                                         structured_output=True,
                                         temperature=self.temperature,
@@ -554,6 +565,7 @@ class SortWorker:
                                         on_log=lambda m: self._emit({"type": "log", "text": m}),
                                         free_mode=self.free_tag_mode or self.auto_tag_mode,
                                         auto_mode=self.auto_tag_mode,
+                                        general_mode=self.general_tag_mode,
                                         prompt_extra=_prompt_for_request(),
                                     )
                                     result = ClassificationResult(category, [category], 0.75, "legacy_video_output", category == UNCATEGORIZED, "")
@@ -574,6 +586,7 @@ class SortWorker:
                                 on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
                                 free_mode=self.free_tag_mode or self.auto_tag_mode,
                                 auto_mode=self.auto_tag_mode,
+                                general_mode=self.general_tag_mode,
                                 prompt_extra=_prompt_for_request(),
                                 structured_output=self.structured_output,
                                 temperature=self.temperature,
@@ -589,6 +602,9 @@ class SortWorker:
                                 result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
                             elif not self.structured_output and self.free_tag_mode:
                                 category = normalize_tag_free(raw)
+                                result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
+                            elif not self.structured_output and self.general_tag_mode:
+                                category = normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
                                 result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
                             elif not self.structured_output:
                                 category = normalize_tag(raw)
@@ -607,7 +623,8 @@ class SortWorker:
                             }
                         )
                         category = UNCATEGORIZED
-                    if not (self.free_tag_mode or self.auto_tag_mode) and category not in CANONICAL_CATEGORY_WHITELIST:
+                    strict_whitelist = GENERAL_CATEGORY_WHITELIST if self.general_tag_mode else CANONICAL_CATEGORY_WHITELIST
+                    if not (self.free_tag_mode or self.auto_tag_mode) and category not in strict_whitelist:
                         category = UNCATEGORIZED
                         result = ClassificationResult(UNCATEGORIZED, result.candidates, result.confidence, result.reason_short, True, result.raw_text)
                     if category != UNCATEGORIZED:

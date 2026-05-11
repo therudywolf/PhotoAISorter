@@ -8,9 +8,10 @@ import re
 from typing import Any, Literal
 
 from app.categorizer import normalize_tag, normalize_tag_auto, normalize_tag_free
+from app.constants import GENERAL_CATEGORY_WHITELIST
 from app.constants import UNCATEGORIZED
 
-TagMode = Literal["strict", "auto", "free"]
+TagMode = Literal["strict", "general", "auto", "free"]
 
 _JSON_FENCE_RE = re.compile(r"(?is)```(?:json)?\s*(\{.*?\})\s*```")
 
@@ -62,6 +63,8 @@ def _normalize(raw: str | None, mode: TagMode, aliases: dict[str, str] | None = 
         return normalize_tag_auto(raw, extra_aliases=aliases)
     if mode == "free":
         return normalize_tag_free(raw)
+    if mode == "general":
+        return normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
     return normalize_tag(raw)
 
 

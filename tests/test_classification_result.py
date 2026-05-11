@@ -25,6 +25,18 @@ def test_parse_legacy_tag_fallback() -> None:
     assert result.needs_review is False
 
 
+def test_parse_general_preset_tag() -> None:
+    result = parse_classification_result('{"primary_category": "coding_ide_and_terminal", "confidence": 0.8}', mode="general")
+    assert result.category == "coding_ide_and_terminal"
+    assert result.needs_review is False
+
+
+def test_parse_strict_rejects_general_only_tag() -> None:
+    result = parse_classification_result("coding_ide_and_terminal", mode="strict")
+    assert result.category == UNCATEGORIZED
+    assert result.needs_review is True
+
+
 def test_parse_empty_falls_back_uncategorized() -> None:
     result = parse_classification_result("", mode="strict")
     assert result.category == UNCATEGORIZED

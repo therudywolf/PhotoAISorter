@@ -18,6 +18,7 @@ from app.constants import (
     DEFAULT_API_BASE,
     DEFAULT_API_KEY,
     DEFAULT_MODEL,
+    GENERAL_CATEGORIES,
     LOG_MAX_LINES,
     MediaScanMode,
     PIPELINE_VERSION,
@@ -123,7 +124,7 @@ class App(ctk.CTk):
         self._media_mode_var = ctk.StringVar(value=mm)
         self._sort_workers_var = ctk.StringVar(value=str(saved.get("sort_workers", 3) or 3))
         _saved_mode = str(saved.get("tag_mode", "") or "").strip()
-        if _saved_mode not in {"strict", "free", "auto"}:
+        if _saved_mode not in {"strict", "general", "free", "auto"}:
             _saved_free = bool(saved.get("free_tag_mode", False))
             _saved_mode = "free" if _saved_free else "strict"
         self._tag_mode_var = ctk.StringVar(value=_saved_mode)
@@ -171,7 +172,9 @@ class App(ctk.CTk):
         self._tabs.pack(fill="both", expand=True, padx=0, pady=0)
         tab_sort = self._tabs.add(t("tabs.sort"))
         tab_dup = self._tabs.add(t("tabs.duplicates"))
-        P = tab_sort
+        sort_scroll = ctk.CTkScrollableFrame(tab_sort, fg_color="transparent")
+        sort_scroll.pack(fill="both", expand=True)
+        P = sort_scroll
 
         folders = ctk.CTkFrame(P, fg_color=("gray90", "gray16"), corner_radius=8)
         folders.pack(fill="x", **pad)
@@ -226,6 +229,7 @@ class App(ctk.CTk):
         row_tag_mode.pack(fill="x", padx=8, pady=(0, 4))
         for val, label_key in (
             ("strict", "folders.tag_mode.strict_radio"),
+            ("general", "folders.tag_mode.general_radio"),
             ("auto", "folders.tag_mode.auto_radio"),
             ("free", "folders.tag_mode.free_radio"),
         ):
@@ -446,7 +450,9 @@ class App(ctk.CTk):
         self._channel_err_streak = 0
         self._channel_err_suppressed = 0
 
-        self._dup_pane = DuplicatesPane(tab_dup, self)
+        dup_scroll = ctk.CTkScrollableFrame(tab_dup, fg_color="transparent")
+        dup_scroll.pack(fill="both", expand=True)
+        self._dup_pane = DuplicatesPane(dup_scroll, self)
         self._dup_pane.pack(fill="both", expand=True, padx=4, pady=4)
 
     def _update_tag_mode_hint(self) -> None:
@@ -455,6 +461,8 @@ class App(ctk.CTk):
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_free"))
         elif mode == "auto":
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_auto"))
+        elif mode == "general":
+            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_general"))
         else:
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_strict"))
 
@@ -465,7 +473,8 @@ class App(ctk.CTk):
         win.transient(self)
         tb = ctk.CTkTextbox(win, font=ctk.CTkFont(size=12))
         tb.pack(fill="both", expand=True, padx=12, pady=(12, 8))
-        tb.insert("1.0", _format_tag_list_for_display(CANONICAL_CATEGORIES))
+        categories = GENERAL_CATEGORIES if self._tag_mode_var.get() == "general" else CANONICAL_CATEGORIES
+        tb.insert("1.0", _format_tag_list_for_display(categories))
         tb.configure(state="disabled")
         ctk.CTkButton(win, text=t("buttons.close"), command=win.destroy).pack(pady=(0, 12))
 
@@ -691,7 +700,7 @@ class App(ctk.CTk):
         if mm in {m.value for m in MediaScanMode}:
             self._media_mode_var.set(mm)
         tag_mode = str(row["tag_mode"] or "strict")
-        if tag_mode in {"strict", "auto", "free"}:
+        if tag_mode in {"strict", "general", "auto", "free"}:
             self._tag_mode_var.set(tag_mode)
         self._review_first_var.set(bool(int(row["review_first"] or 0)))
 
@@ -1050,6 +1059,8 @@ class App(ctk.CTk):
             self._append_log("Сессия: новая или без найденного незавершённого прогресса.")
         if tag_mode == "strict":
             self._append_log(t("sort.log_mode_strict"))
+        elif tag_mode == "general":
+            self._append_log(t("sort.log_mode_general"))
         elif tag_mode == "auto":
             self._append_log(t("sort.log_mode_auto"))
         else:
@@ -1069,6 +1080,7 @@ class App(ctk.CTk):
             workers=workers,
             free_tag_mode=tag_mode == "free",
             auto_tag_mode=tag_mode == "auto",
+            general_tag_mode=tag_mode == "general",
             structured_output=True,
             review_first=bool(self._review_first_var.get()),
             category_aliases=aliases,
@@ -1124,7 +1136,7 @@ class App(ctk.CTk):
             self._total_files = int(msg.get("total", 0))
             self._prog_label.configure(text=f"{self._done_files} / {self._total_files}")
             self._eta_label.configure(text="Осталось: —")
-            if self._total_files >= 50_000 and self._tag_mode_var.get() != "strict":
+            if self._total_files >= 50_000 and self._tag_mode_var.get() in {"auto", "free"}:
                 self._append_log(t("sort.warn_many_files_free", n=self._total_files))
         elif msg_type == "current":
             p = msg.get("path", "")

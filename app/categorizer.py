@@ -126,7 +126,9 @@ def _strip_thinking_sections(text: str) -> str:
         return ""
     cleaned = text
     cleaned = re.sub(r"(?is)<think>.*?</think>", " ", cleaned)
+    cleaned = re.sub(r"(?is)<think>.*$", " ", cleaned)
     cleaned = re.sub(r"(?is)<\|channel\>\s*thought\b.*?<channel\|>", " ", cleaned)
+    cleaned = re.sub(r"(?is)<\|channel\|>\s*(?:analysis|thought)\b.*?<\|channel\|>\s*final\b", " ", cleaned)
     cleaned = re.sub(r"(?im)^\s*<think>\s*$", " ", cleaned)
     cleaned = re.sub(r"(?im)^\s*</think>\s*$", " ", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -335,9 +337,9 @@ def normalize_tag_auto(
     from model output and normalize it as a safe hierarchical tag.
     """
     swl = substring_whitelist if substring_whitelist is not None else GENERAL_CATEGORY_WHITELIST
-    base = normalize_tag(raw, whitelist=swl)
-    if raw and base != UNCATEGORIZED:
-        return base
+    exact = normalize_tag_exact(raw, whitelist=swl)
+    if raw and exact != UNCATEGORIZED:
+        return exact
     if not raw:
         return UNCATEGORIZED
     cleaned = _strip_thinking_sections(raw).lower()

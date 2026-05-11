@@ -24,6 +24,7 @@ from app.constants import (
     DEFAULT_API_KEY,
     DEFAULT_MODEL,
     GENERAL_CATEGORIES,
+    GENERAL_CATEGORY_WHITELIST,
     GIF_EXTENSION,
     MODELS_PATH,
     PRIORITY_RULES_BLOCK,
@@ -104,15 +105,17 @@ def build_classification_system_prompt(
     *,
     free_mode: bool = False,
     auto_mode: bool = False,
+    general_mode: bool = False,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> str:
     """Системный текст: базовые правила + приоритеты + определения по тегам + USER_CONTEXT."""
-    tag_keys: tuple[str, ...] = GENERAL_CATEGORIES if (auto_mode or free_mode) else CATEGORIES
+    tag_keys: tuple[str, ...] = GENERAL_CATEGORIES if general_mode else CATEGORIES
     if auto_mode:
         header = (
-            "You are a local backend automated tagging script. First prefer known tags below. "
-            "If none fit, propose stable short lowercase categories. Use broad roots such as "
+            "You are a local backend automated tagging script. Create stable short lowercase categories. "
+            "The known tags below are reference examples, not a whitelist. Use them only when they are the best literal match. "
+            "If a clearer category exists, create it. Use broad roots such as "
             "vehicles, humans, animals, nature, landscape, screenshots, memes, documents, art, "
             "illustration, food, travel, architecture, city, objects. Avoid near-duplicate words "
             "and overly specific one-off folders. Output one line with candidate tags separated by commas "
@@ -126,6 +129,12 @@ def build_classification_system_prompt(
             "Use a preset tag from the list below ONLY when it is the best literal match; "
             "do NOT pick a preset just because its name appears inside your reasoning. "
             "When in doubt, output a new specific hierarchical path."
+        )
+    elif general_mode:
+        header = (
+            "You are a local backend automated tagging script. You have no conversational ability. "
+            "Your ONLY job is to output a single exact string from the extended General preset list: "
+            f"{', '.join(tag_keys)}."
         )
     else:
         header = (
@@ -151,9 +160,10 @@ def build_classification_system_prompt(
         "",
         PRIORITY_RULES_BLOCK,
         "",
-        "Definitions (tag: meaning):",
+        "Definitions (tag: meaning):" if not (auto_mode or free_mode) else "Reference definitions (optional, not a whitelist):",
     ]
-    for cat in tag_keys:
+    reference_keys = GENERAL_CATEGORIES if (auto_mode or free_mode) else tag_keys
+    for cat in reference_keys:
         parts.append(f"{cat}: {CATEGORY_PROMPTS[cat]}")
     parts.append("")
     parts.append(
@@ -249,8 +259,13 @@ def _strip_thinking_sections(text: str) -> str:
     if not text:
         return ""
     cleaned = text
+    final_match = re.search(r"(?is)<\|channel\|>\s*final\b(.*)$", cleaned)
+    if final_match:
+        cleaned = final_match.group(1)
     cleaned = re.sub(r"(?is)<think>.*?</think>", " ", cleaned)
+    cleaned = re.sub(r"(?is)<think>.*$", " ", cleaned)
     cleaned = re.sub(r"(?is)<\|channel\>\s*thought\b.*?<channel\|>", " ", cleaned)
+    cleaned = re.sub(r"(?is)<\|channel\|>\s*(?:analysis|thought)\b.*?<\|channel\|>\s*final\b", " ", cleaned)
     cleaned = re.sub(r"(?im)^\s*<think>\s*$", " ", cleaned)
     cleaned = re.sub(r"(?im)^\s*</think>\s*$", " ", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -279,6 +294,7 @@ def build_messages(
     *,
     free_mode: bool = False,
     auto_mode: bool = False,
+    general_mode: bool = False,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
@@ -287,6 +303,7 @@ def build_messages(
         user_context,
         free_mode=free_mode,
         auto_mode=auto_mode,
+        general_mode=general_mode,
         prompt_extra=prompt_extra,
         structured_output=structured_output,
     )
@@ -320,6 +337,7 @@ def build_messages_multi(
     *,
     free_mode: bool = False,
     auto_mode: bool = False,
+    general_mode: bool = False,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
@@ -328,6 +346,7 @@ def build_messages_multi(
         user_context,
         free_mode=free_mode,
         auto_mode=auto_mode,
+        general_mode=general_mode,
         prompt_extra=prompt_extra,
         structured_output=structured_output,
     )
@@ -365,6 +384,7 @@ def _chat_completion_once(
     timeout: tuple[float, float] | float,
     free_mode: bool,
     auto_mode: bool,
+    general_mode: bool,
     prompt_extra: str,
     structured_output: bool,
     temperature: float,
@@ -379,6 +399,7 @@ def _chat_completion_once(
             user_context,
             free_mode=free_mode,
             auto_mode=auto_mode,
+            general_mode=general_mode,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
         ),
@@ -416,6 +437,7 @@ def _chat_completion_multi_once(
     timeout: tuple[float, float] | float,
     free_mode: bool,
     auto_mode: bool,
+    general_mode: bool,
     prompt_extra: str,
     structured_output: bool,
     temperature: float,
@@ -432,6 +454,7 @@ def _chat_completion_multi_once(
             user_context,
             free_mode=free_mode,
             auto_mode=auto_mode,
+            general_mode=general_mode,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
         ),
@@ -470,6 +493,7 @@ def chat_completion_multi(
     on_retry: Callable[[str], None] | None = None,
     free_mode: bool = False,
     auto_mode: bool = False,
+    general_mode: bool = False,
     prompt_extra: str = "",
     structured_output: bool = False,
     temperature: float = 0.2,
@@ -487,6 +511,7 @@ def chat_completion_multi(
             timeout=t,
             free_mode=free_mode,
             auto_mode=auto_mode,
+            general_mode=general_mode,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
             temperature=temperature,
@@ -509,6 +534,7 @@ def classify_frames(
     on_log: Callable[[str], None] | None = None,
     free_mode: bool = False,
     auto_mode: bool = False,
+    general_mode: bool = False,
     prompt_extra: str = "",
 ) -> str:
     """
@@ -538,12 +564,15 @@ def classify_frames(
                 on_retry=on_retry,
                 free_mode=free_mode,
                 auto_mode=auto_mode,
+                general_mode=general_mode,
                 prompt_extra=prompt_extra,
             )
             if auto_mode:
                 return normalize_tag_auto(raw)
             if free_mode:
                 return normalize_tag_free(raw)
+            if general_mode:
+                return normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
             return normalize_tag(raw)
         except Exception as e:
             log(f"rollback: single frame: {e!s}")
@@ -574,12 +603,15 @@ def classify_frames(
                     on_retry=on_retry,
                     free_mode=free_mode,
                     auto_mode=auto_mode,
+                    general_mode=general_mode,
                     prompt_extra=prompt_extra,
                 )
                 if auto_mode:
                     return normalize_tag_auto(raw)
                 if free_mode:
                     return normalize_tag_free(raw)
+                if general_mode:
+                    return normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
                 return normalize_tag(raw)
             except Exception as e:
                 log(f"rollback: multi n={len(subset)}: {e!s}")
@@ -595,12 +627,15 @@ def classify_frames(
                     on_retry=on_retry,
                     free_mode=free_mode,
                     auto_mode=auto_mode,
+                    general_mode=general_mode,
                     prompt_extra=prompt_extra,
                 )
                 if auto_mode:
                     return normalize_tag_auto(raw)
                 if free_mode:
                     return normalize_tag_free(raw)
+                if general_mode:
+                    return normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
                 return normalize_tag(raw)
             except Exception as e:
                 log(f"rollback: single after multi fail: {e!s}")
@@ -618,12 +653,15 @@ def classify_frames(
                 on_retry=on_retry,
                 free_mode=free_mode,
                 auto_mode=auto_mode,
+                general_mode=general_mode,
                 prompt_extra=prompt_extra,
             )
             if auto_mode:
                 tags.append(normalize_tag_auto(raw))
             elif free_mode:
                 tags.append(normalize_tag_free(raw))
+            elif general_mode:
+                tags.append(normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST))
             else:
                 tags.append(normalize_tag(raw))
         except Exception as e:
@@ -636,7 +674,7 @@ def classify_frames(
             counts[tag] = counts.get(tag, 0) + 1
         # Prefer the most frequent free tag; tie-breaker by shortest (more general) then lexical.
         return sorted(counts, key=lambda k: (-counts[k], len(k), k))[0]
-    return merge_tags_by_priority(tags)
+    return merge_tags_by_priority(tags, whitelist=GENERAL_CATEGORY_WHITELIST if general_mode else None)
 
 
 def chat_completion(
@@ -650,6 +688,7 @@ def chat_completion(
     on_retry: Callable[[str], None] | None = None,
     free_mode: bool = False,
     auto_mode: bool = False,
+    general_mode: bool = False,
     prompt_extra: str = "",
     structured_output: bool = False,
     temperature: float = 0.2,
@@ -670,6 +709,7 @@ def chat_completion(
             timeout=t,
             free_mode=free_mode,
             auto_mode=auto_mode,
+            general_mode=general_mode,
             prompt_extra=prompt_extra,
             structured_output=structured_output,
             temperature=temperature,

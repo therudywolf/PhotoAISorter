@@ -8,10 +8,11 @@ The app is designed for private local media libraries that may contain personal 
 
 - Photo, video, and GIF scanning.
 - Local vision classification through an OpenAI-compatible LM Studio API.
-- Three tag modes:
-  - `Preset: my tags`: fixed built-in category list.
-  - `Smart auto categories`: built-in preset first, then stabilized new folders.
-  - `Model tags`: free-form model folders for experiments.
+- Four tag modes:
+  - `Furry`: the original fixed built-in category list.
+  - `General`: `Furry` plus a broader fixed preset for geek, IT, car culture, fitness, nightlife, and LGBTQ+ galleries.
+  - `Auto categories`: stabilized model-generated folders.
+  - `Free model tags`: unrestricted model folders for experiments.
 - Structured JSON classification with legacy tag fallback.
 - Model profiles for classifier, duplicate verifier, screenshot OCR, and quick preview roles.
 - Lightweight LM Studio vision benchmark for choosing a model.
@@ -122,11 +123,13 @@ The sorter uses the active profile. Duplicate workflows keep their own model con
 
 ## Sorting Modes
 
-`Preset: my tags` is the safest mode for large libraries because it only writes known folders.
+`Furry` is the safest original preset for large libraries because it only writes the original known folders.
 
-`Smart auto categories` is intended for mixed libraries. It normalizes model output so near-duplicates such as `car`, `cars`, `vehicle`, and `auto` do not create separate folder trees.
+`General` is the recommended fixed preset for mixed personal libraries. It keeps all `Furry` tags and adds broader buckets for geek, IT, car, fitness, nightlife, and LGBTQ+ content without allowing arbitrary folder creation.
 
-`Model tags` is intentionally free-form and can create many folders. Use it for small test batches or exploration.
+`Auto categories` is intended for mixed libraries where you want new folders. It normalizes model output so near-duplicates such as `car`, `cars`, `vehicle`, and `auto` do not create separate folder trees.
+
+`Free model tags` is intentionally free-form and can create many folders. Use it for small test batches or exploration.
 
 ## Review-First Mode
 
