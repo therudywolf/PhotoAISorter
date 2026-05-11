@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+VENV_DIR=".venv-linux"
 LAUNCH_MODE="console"
 VENV_RECREATE_DONE=0
 IMPORT_REPAIR_DONE=0
@@ -33,14 +34,14 @@ fail() {
 
 remove_venv() {
     local tries=0
-    while [ -d ".venv" ] && [ $tries -lt 5 ]; do
-        rm -rf ".venv" 2>/dev/null || true
-        if [ -d ".venv" ]; then
+    while [ -d "$VENV_DIR" ] && [ $tries -lt 5 ]; do
+        rm -rf "$VENV_DIR" 2>/dev/null || true
+        if [ -d "$VENV_DIR" ]; then
             tries=$((tries + 1))
             sleep 2
         fi
     done
-    [ ! -d ".venv" ]
+    [ ! -d "$VENV_DIR" ]
 }
 
 case "${1:-}" in
@@ -68,37 +69,37 @@ if ! command -v python3 &>/dev/null; then
 fi
 
 create_venv() {
-    if [ ! -f ".venv/bin/python" ]; then
-        echo "[1/3] Создание виртуального окружения .venv ..."
-        python3 -m venv .venv
+    if [ ! -f "$VENV_DIR/bin/python" ]; then
+        echo "[1/3] Создание виртуального окружения $VENV_DIR ..."
+        python3 -m venv "$VENV_DIR"
         if [ $? -ne 0 ]; then
             echo "[ОШИБКА] Не удалось создать venv."
             fail
         fi
         echo "      Готово."
     else
-        echo "[1/3] Виртуальное окружение .venv уже есть."
+        echo "[1/3] Виртуальное окружение $VENV_DIR уже есть."
     fi
 }
 
 create_venv
 
-PY="$(pwd)/.venv/bin/python"
-DEPS_MARKER="$(pwd)/.venv/.photo_ai_sorter_deps_ok"
+PY="$(pwd)/$VENV_DIR/bin/python"
+DEPS_MARKER="$(pwd)/$VENV_DIR/.photo_ai_sorter_deps_ok"
 
 if ! "$PY" -c "import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)" 2>/dev/null; then
     if [ "$VENV_RECREATE_DONE" -eq 1 ]; then
         echo "[ОШИБКА] Нужен Python 3.10+. Проверьте системный Python и запустите снова."
         fail
     fi
-    echo "[1/3] .venv повреждён или создан старой версией Python — пересоздаю ..."
+    echo "[1/3] $VENV_DIR повреждён или создан старой версией Python — пересоздаю ..."
     if ! remove_venv; then
         echo "[ОШИБКА] Не удалось удалить старый .venv."
         fail
     fi
     VENV_RECREATE_DONE=1
     create_venv
-    PY="$(pwd)/.venv/bin/python"
+    PY="$(pwd)/$VENV_DIR/bin/python"
 fi
 
 echo "[2/3] Проверка зависимостей ..."
@@ -109,7 +110,7 @@ else
     if ! "$PY" -c "
 from pathlib import Path; import sys
 req = Path('requirements.txt')
-marker = Path('.venv/.photo_ai_sorter_deps_ok')
+marker = Path('$VENV_DIR/.photo_ai_sorter_deps_ok')
 sys.exit(0 if marker.exists() and marker.stat().st_mtime >= req.stat().st_mtime else 1)
 " 2>/dev/null; then
         NEED_INSTALL=1
@@ -128,7 +129,7 @@ if [ "$NEED_INSTALL" -eq 1 ]; then
         "$PY" -m pip install -r requirements.txt --upgrade --disable-pip-version-check
         fail
     }
-    "$PY" -c "from pathlib import Path; Path('.venv/.photo_ai_sorter_deps_ok').write_text('ok', encoding='utf-8')"
+    "$PY" -c "from pathlib import Path; Path('$VENV_DIR/.photo_ai_sorter_deps_ok').write_text('ok', encoding='utf-8')"
     echo "      Готово."
 else
     echo "      Зависимости уже актуальны."
@@ -136,7 +137,7 @@ fi
 
 echo "[3/3] Проверка окружения ..."
 if ! "$PY" -c "import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)"; then
-    echo "[ОШИБКА] Нужен Python 3.10+. Удалите .venv и запустите скрипт снова."
+    echo "[ОШИБКА] Нужен Python 3.10+. Удалите $VENV_DIR и запустите скрипт снова."
     fail
 fi
 
@@ -147,19 +148,19 @@ fi
 
 if ! "$PY" -c "import app.gui; import app.gui_duplicates; import app.duplicate_finder; import app.duplicate_worker; import app.signature_db; import app.worker; import app.lm_studio; import app.settings_store; import app.video_frames; print('Проверка импорта: OK')"; then
     if [ "$IMPORT_REPAIR_DONE" -eq 0 ]; then
-        echo "[3/3] Импорты не прошли — пересоздаю .venv начисто ..."
+        echo "[3/3] Импорты не прошли — пересоздаю $VENV_DIR начисто ..."
         if ! remove_venv; then
-            echo "[ОШИБКА] Не удалось удалить старый .venv."
+            echo "[ОШИБКА] Не удалось удалить старый $VENV_DIR."
             fail
         fi
         IMPORT_REPAIR_DONE=1
         VENV_RECREATE_DONE=1
         create_venv
-        PY="$(pwd)/.venv/bin/python"
+        PY="$(pwd)/$VENV_DIR/bin/python"
         echo "      Установка зависимостей ..."
         "$PY" -m pip install --upgrade pip setuptools wheel -q --disable-pip-version-check
         "$PY" -m pip install -r requirements.txt --upgrade -q --disable-pip-version-check
-        "$PY" -c "from pathlib import Path; Path('.venv/.photo_ai_sorter_deps_ok').write_text('ok', encoding='utf-8')"
+        "$PY" -c "from pathlib import Path; Path('$VENV_DIR/.photo_ai_sorter_deps_ok').write_text('ok', encoding='utf-8')"
         if ! "$PY" -c "import app.gui; import app.gui_duplicates; import app.duplicate_finder; import app.duplicate_worker; import app.signature_db; import app.worker; import app.lm_studio; import app.settings_store; import app.video_frames; print('Проверка импорта: OK')"; then
             echo "[ОШИБКА] Не удалось импортировать приложение."
             echo "Попробуйте вручную: $PY -m pip install -r requirements.txt -v"
