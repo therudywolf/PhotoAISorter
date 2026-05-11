@@ -1,5 +1,8 @@
 """Video sample time positions (no ffmpeg required)."""
 
+from pathlib import Path
+
+from app.video_frames import diagnose_media_decode
 from app.video_frames import video_sample_times_sec
 
 
@@ -17,3 +20,10 @@ def test_single_point() -> None:
 
 def test_zero_duration() -> None:
     assert video_sample_times_sec(0.0, 3) == [0.0, 0.0, 0.0]
+
+
+def test_diagnose_missing_video_does_not_raise(tmp_path: Path) -> None:
+    report = diagnose_media_decode(tmp_path / "missing.mp4", 3)
+    assert report["exists"] is False
+    assert report["decoded_frames"] == 0
+    assert report["wanted_frames"] == 3

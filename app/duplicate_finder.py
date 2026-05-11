@@ -400,6 +400,41 @@ def _hash_candidate_pairs(
     return out
 
 
+def _multiframe_candidate_pairs(
+    idxs: list[int],
+    records: list[FileDupInfo],
+    max_dist: int,
+) -> list[tuple[int, int]]:
+    """
+    Candidate pairs for video/GIF signatures.
+
+    Index every sampled frame pHash, then verify the full multi-frame distance later.
+    This keeps large video buckets tractable while still finding shifted-frame matches.
+    """
+    tree = _BKTree()
+    out: set[tuple[int, int]] = set()
+    for idx in idxs:
+        frames = records[idx].phash_frames if records[idx].phash_frames else None
+        hashes = frames if frames else ([records[idx].phash] if records[idx].phash else [])
+        candidates: set[int] = set()
+        for h in hashes:
+            key = _hash_int(h)
+            if key is None:
+                continue
+            candidates.update(tree.query(key, max_dist))
+        for prev in candidates:
+            if prev == idx:
+                continue
+            if not (_has_multiframe_signature(records[prev]) or _has_multiframe_signature(records[idx])):
+                continue
+            out.add((prev, idx) if prev < idx else (idx, prev))
+        for h in hashes:
+            key = _hash_int(h)
+            if key is not None:
+                tree.insert(key, idx)
+    return list(out)
+
+
 def _path_needs_multiframe_phash(path: Path) -> bool:
     suf = path.suffix.lower()
     if suf in VIDEO_EXTENSIONS:
@@ -687,10 +722,14 @@ def build_groups_from_records(
                 if _perceptual_match_records(records[ia], records[ib], options):
                     uf.union(ia, ib)
 
-            for ia in multiframe:
-                for ib in idxs:
-                    if ia == ib:
-                        continue
+            if multiframe:
+                video_radius = max(options.phash_max_hamming, options.phash_video_mean_max)
+                if on_log and len(multiframe) > 1000:
+                    on_log(
+                        f"Группировка видео: {len(multiframe)} файлов в корзине; "
+                        "используется индекс по кадрам вместо полного перебора."
+                    )
+                for ia, ib in _multiframe_candidate_pairs(idxs, records, video_radius):
                     pair = (ia, ib) if ia < ib else (ib, ia)
                     if pair in seen_pairs:
                         continue

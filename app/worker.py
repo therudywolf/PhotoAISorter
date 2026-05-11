@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
-from app.categorizer import normalize_tag, normalize_tag_auto, normalize_tag_free
+from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_auto, normalize_tag_free
 from app.category_aliases import aliases_to_prompt_lines
 from app.classification_result import ClassificationResult, parse_classification_result
 from app.constants import (
@@ -31,8 +31,13 @@ from app.constants import (
     VIDEO_FRAME_COUNT,
 )
 from app.db import Database, make_sort_session_key
-from app.images import file_sha256, image_to_jpeg_base64_data_uri, pil_image_to_jpeg_data_uri
-from app.lm_studio import CHAT_COMPLETION_MAX_TOKENS, chat_completion, chat_completion_multi, classify_frames
+from app.images import (
+    file_sha256,
+    image_to_jpeg_base64_data_uri,
+    pil_image_to_jpeg_data_uri,
+    video_contact_sheet_data_uri,
+)
+from app.lm_studio import CHAT_COMPLETION_MAX_TOKENS, EndpointPool, chat_completion, classify_frames
 from app.review_manifest import SortReviewManifest
 from app.task_state import TaskState
 from app.video_frames import extract_frames_reduced, is_animated_gif
@@ -119,7 +124,7 @@ class SortWorker:
         model: str,
         api_key: str | None = None,
         workers: int = 3,
-        api_workers: int = 1,
+        api_workers: int = 4,
         free_tag_mode: bool = False,
         auto_tag_mode: bool = False,
         general_tag_mode: bool = False,
@@ -136,10 +141,11 @@ class SortWorker:
         self.db = db
         self.out_queue = out_queue
         self.api_base = api_base
+        self._endpoint_pool = EndpointPool(api_base)
         self.model = model
         self.api_key = api_key if api_key is not None else DEFAULT_API_KEY
-        self.workers = max(1, min(4, int(workers)))
-        self.api_workers = max(1, min(4, int(api_workers)))
+        self.workers = max(1, min(16, int(workers)))
+        self.api_workers = max(1, min(16, int(api_workers)))
         self.free_tag_mode = bool(free_tag_mode)
         self.auto_tag_mode = bool(auto_tag_mode)
         self.general_tag_mode = bool(general_tag_mode)
@@ -317,6 +323,17 @@ class SortWorker:
             storm_guard_until = 0.0
             storm_lock = threading.Lock()
             api_slots = threading.BoundedSemaphore(self.api_workers)
+            if self._endpoint_pool.size > 1:
+                self._emit(
+                    {
+                        "type": "log",
+                        "text": (
+                            f"Endpoint pool: {self._endpoint_pool.size} серверов, "
+                            f"api_workers={self.api_workers}. "
+                            f"Запросы распределяются round-robin."
+                        ),
+                    }
+                )
             if self.workers > self.api_workers:
                 self._emit(
                     {
@@ -327,6 +344,11 @@ class SortWorker:
                         ),
                     }
                 )
+
+            def _get_api_base() -> str:
+                if self._endpoint_pool.size > 1:
+                    return self._endpoint_pool.next()
+                return self.api_base
 
             def _run_api_call(fn: Callable[[], str]) -> str:
                 while not self._stop.is_set():
@@ -342,21 +364,40 @@ class SortWorker:
             def _register_api_error(exc: Exception) -> None:
                 nonlocal storm_guard_until
                 now = time.monotonic()
+                msg = str(exc).lower()
+                is_model_reload = "model reloaded" in msg or "model crashed" in msg or "exit code" in msg
+
                 with storm_lock:
                     error_times.append(now)
                     window_sec = 12.0
                     while error_times and now - error_times[0] > window_sec:
                         error_times.popleft()
-                    threshold = max(6, self.workers * 3)
-                    if len(error_times) >= threshold:
-                        cooldown = 1.2
+
+                    if is_model_reload:
+                        cooldown = 6.0
                         if now + cooldown > storm_guard_until:
                             storm_guard_until = now + cooldown
                             self._emit(
                                 {
                                     "type": "log",
                                     "text": (
-                                        "Channel Error detected, applying transient backoff "
+                                        f"Model reload/crash detected, pausing all workers "
+                                        f"for {cooldown:.0f}s to let model recover..."
+                                    ),
+                                }
+                            )
+                        return
+
+                    threshold = max(4, self.workers * 2)
+                    if len(error_times) >= threshold:
+                        cooldown = 2.0
+                        if now + cooldown > storm_guard_until:
+                            storm_guard_until = now + cooldown
+                            self._emit(
+                                {
+                                    "type": "log",
+                                    "text": (
+                                        "Error storm detected, applying transient backoff "
                                         f"(~{cooldown:.1f}s) to prevent retry storm."
                                     ),
                                 }
@@ -425,6 +466,9 @@ class SortWorker:
                     aliases=self.category_aliases,
                 )
 
+            def _uncategorized_result(reason: str, raw_text: str = "") -> ClassificationResult:
+                return ClassificationResult(UNCATEGORIZED, [], 0.0, reason, True, raw_text)
+
             def _emit_health(last_api_sec: float | None = None) -> None:
                 avg = (
                     metrics["api_latency_sec"] / metrics["api_calls"]
@@ -446,6 +490,133 @@ class SortWorker:
                         },
                     }
                 )
+
+            def _timed_api_call(fn: Callable[[], str]) -> str:
+                api_t0 = time.monotonic()
+                raw = _run_api_call(fn)
+                api_sec = time.monotonic() - api_t0
+                metrics["api_calls"] += 1
+                metrics["api_latency_sec"] += api_sec
+                _emit_health(api_sec)
+                return raw
+
+            def _handle_video_fallback_error(path: Path, label: str, exc: Exception) -> None:
+                metrics["api_errors"] += 1
+                _register_api_error(exc)
+                self._emit({"type": "log", "text": f"video classify fallback {path.name}: {label}: {exc!s}"})
+
+            def _merge_frame_results(results: list[ClassificationResult]) -> ClassificationResult:
+                valid = [r for r in results if r.category != UNCATEGORIZED]
+                if not valid:
+                    return results[-1] if results else _uncategorized_result("no_valid_frame_results")
+
+                candidates: list[str] = []
+                for r in valid:
+                    for cand in [r.category, *r.candidates]:
+                        if cand != UNCATEGORIZED and cand not in candidates:
+                            candidates.append(cand)
+
+                if self.auto_tag_mode or self.free_tag_mode:
+                    counts: dict[str, int] = {}
+                    best_conf: dict[str, float] = {}
+                    for r in valid:
+                        counts[r.category] = counts.get(r.category, 0) + 1
+                        best_conf[r.category] = max(best_conf.get(r.category, 0.0), r.confidence)
+                    category = sorted(
+                        counts,
+                        key=lambda k: (-counts[k], -best_conf.get(k, 0.0), len(k), k),
+                    )[0]
+                else:
+                    category = merge_tags_by_priority(
+                        [r.category for r in valid],
+                        whitelist=GENERAL_CATEGORY_WHITELIST if self.general_tag_mode else None,
+                    )
+                    if category == UNCATEGORIZED:
+                        category = max(valid, key=lambda r: r.confidence).category
+
+                if category in candidates:
+                    candidates.remove(category)
+                candidates.insert(0, category)
+                confidence = max((r.confidence for r in valid if r.category == category), default=0.75)
+                raw_joined = "\n--- frame ---\n".join(r.raw_text for r in results if r.raw_text)[:4000]
+                return ClassificationResult(
+                    category=category,
+                    candidates=candidates,
+                    confidence=confidence,
+                    reason_short="merged_frame_results",
+                    needs_review=confidence < 0.55,
+                    raw_text=raw_joined,
+                )
+
+            def _classify_video_structured(path: Path, frames: list[Any], user_context: str) -> ClassificationResult:
+                frames = [f for f in frames if f is not None][:VIDEO_FRAME_COUNT]
+                if not frames:
+                    return _uncategorized_result("no_frames")
+
+                base_prompt = _prompt_for_request().strip()
+                video_prompt = (
+                    "VIDEO MODE: The supplied image is a contact sheet made from chronological "
+                    "frames of one video, ordered left to right. Classify the whole video content. "
+                    "Ignore black padding and do not classify it as a collage or screenshot."
+                )
+                prompt_extra = f"{base_prompt}\n\n{video_prompt}".strip()
+                try:
+                    sheet_uri = video_contact_sheet_data_uri(frames)
+                    raw = _timed_api_call(
+                        lambda: chat_completion(
+                            sheet_uri,
+                            user_context,
+                            api_base=_get_api_base(),
+                            model=self.model,
+                            api_key=self.api_key,
+                            timeout=_timeout(),
+                            on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
+                            free_mode=self.free_tag_mode,
+                            auto_mode=self.auto_tag_mode,
+                            general_mode=self.general_tag_mode,
+                            prompt_extra=prompt_extra,
+                            structured_output=True,
+                            temperature=self.temperature,
+                            max_tokens=self.max_tokens,
+                        )
+                    )
+                    result = _result_from_raw(raw)
+                    if result.category == UNCATEGORIZED:
+                        self._emit(
+                            {
+                                "type": "log",
+                                "text": f"video classify {path.name}: contact sheet returned uncategorized",
+                            }
+                        )
+                    return result
+                except Exception as e:
+                    _handle_video_fallback_error(path, "contact sheet", e)
+
+                try:
+                    mid = frames[len(frames) // 2]
+                    single_uri = pil_image_to_jpeg_data_uri(mid, max_side=768, quality=76)
+                    raw = _timed_api_call(
+                        lambda: chat_completion(
+                            single_uri,
+                            user_context,
+                            api_base=_get_api_base(),
+                            model=self.model,
+                            api_key=self.api_key,
+                            timeout=_timeout(),
+                            on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
+                            free_mode=self.free_tag_mode,
+                            auto_mode=self.auto_tag_mode,
+                            general_mode=self.general_tag_mode,
+                            prompt_extra=f"{base_prompt}\n\nVIDEO MODE: This is one representative frame from a video.".strip(),
+                            structured_output=True,
+                            temperature=self.temperature,
+                            max_tokens=self.max_tokens,
+                        )
+                    )
+                    return _result_from_raw(raw)
+                except Exception as e:
+                    _handle_video_fallback_error(path, "single representative frame", e)
+                    return _uncategorized_result("video_api_error", str(e))
 
             def _record_review(
                 path: Path,
@@ -535,13 +706,12 @@ class SortWorker:
 
                 category = UNCATEGORIZED
                 result = ClassificationResult(UNCATEGORIZED, [], 0.0, "", True, "")
+                suf = path.suffix.lower()
+                use_video_pipeline = suf in VIDEO_EXTENSIONS or (
+                    suf == GIF_EXTENSION and is_animated_gif(path)
+                )
                 for attempt in range(1, CLASSIFY_FILE_MAX_ATTEMPTS + 1):
                     try:
-                        suf = path.suffix.lower()
-                        use_video_pipeline = suf in VIDEO_EXTENSIONS or (
-                            suf == GIF_EXTENSION and is_animated_gif(path)
-                        )
-
                         if use_video_pipeline:
                             frames = extract_frames_reduced(
                                 path,
@@ -558,35 +728,16 @@ class SortWorker:
                                 category = UNCATEGORIZED
                                 result = ClassificationResult(UNCATEGORIZED, [], 0.0, "no_frames_decoded", True, "")
                             else:
-                                uris = [pil_image_to_jpeg_data_uri(im) for im in frames]
-                                api_t0 = time.monotonic()
                                 if self.structured_output:
-                                    raw = _run_api_call(
-                                        lambda: chat_completion_multi(
-                                            uris[:VIDEO_FRAME_COUNT],
-                                            user_context,
-                                            api_base=self.api_base,
-                                            model=self.model,
-                                            api_key=self.api_key,
-                                            timeout=_timeout(),
-                                            on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                                            free_mode=self.free_tag_mode or self.auto_tag_mode,
-                                            auto_mode=self.auto_tag_mode,
-                                            general_mode=self.general_tag_mode,
-                                            prompt_extra=_prompt_for_request(),
-                                            structured_output=True,
-                                            temperature=self.temperature,
-                                            max_tokens=self.max_tokens,
-                                        )
-                                    )
-                                    result = _result_from_raw(raw)
+                                    result = _classify_video_structured(path, frames, user_context)
                                     category = result.category
                                 else:
-                                    category = _run_api_call(
+                                    uris = [pil_image_to_jpeg_data_uri(im) for im in frames]
+                                    category = _timed_api_call(
                                         lambda: classify_frames(
                                             uris,
                                             user_context,
-                                            api_base=self.api_base,
+                                            api_base=_get_api_base(),
                                             model=self.model,
                                             api_key=self.api_key,
                                             timeout=_timeout(),
@@ -599,18 +750,13 @@ class SortWorker:
                                         )
                                     )
                                     result = ClassificationResult(category, [category], 0.75, "legacy_video_output", category == UNCATEGORIZED, "")
-                                api_sec = time.monotonic() - api_t0
-                                metrics["api_calls"] += 1
-                                metrics["api_latency_sec"] += api_sec
-                                _emit_health(api_sec)
                         else:
                             data_uri = image_to_jpeg_base64_data_uri(path)
-                            api_t0 = time.monotonic()
-                            raw = _run_api_call(
+                            raw = _timed_api_call(
                                 lambda: chat_completion(
                                     data_uri,
                                     user_context,
-                                    api_base=self.api_base,
+                                    api_base=_get_api_base(),
                                     model=self.model,
                                     api_key=self.api_key,
                                     timeout=_timeout(),
@@ -624,9 +770,6 @@ class SortWorker:
                                     max_tokens=self.max_tokens,
                                 )
                             )
-                            api_sec = time.monotonic() - api_t0
-                            metrics["api_calls"] += 1
-                            metrics["api_latency_sec"] += api_sec
                             result = _result_from_raw(raw)
                             category = result.category
                             if not self.structured_output and self.auto_tag_mode:
@@ -641,7 +784,6 @@ class SortWorker:
                             elif not self.structured_output:
                                 category = normalize_tag(raw)
                                 result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
-                            _emit_health(api_sec)
                     except Exception as e:
                         metrics["api_errors"] += 1
                         _register_api_error(e)
@@ -661,7 +803,8 @@ class SortWorker:
                         result = ClassificationResult(UNCATEGORIZED, result.candidates, result.confidence, result.reason_short, True, result.raw_text)
                     if category != UNCATEGORIZED:
                         break
-                    if attempt < CLASSIFY_FILE_MAX_ATTEMPTS:
+                    can_retry_uncategorized = not (use_video_pipeline and self.structured_output)
+                    if attempt < CLASSIFY_FILE_MAX_ATTEMPTS and can_retry_uncategorized:
                         self._emit(
                             {
                                 "type": "log",
@@ -673,6 +816,17 @@ class SortWorker:
                         )
                         if not _sleep_or_stopped(0.2 * attempt):
                             break
+                    elif use_video_pipeline and self.structured_output:
+                        self._emit(
+                            {
+                                "type": "log",
+                                "text": (
+                                    f"video classify {path.name}: frame fallbacks exhausted; "
+                                    "leaving uncategorized without repeating the same video request cascade"
+                                ),
+                            }
+                        )
+                        break
 
                 if self._stop.is_set():
                     complete_task(time.monotonic() - t0)

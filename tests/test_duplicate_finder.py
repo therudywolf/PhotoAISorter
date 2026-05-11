@@ -200,3 +200,48 @@ def test_perceptual_grouping_uses_hamming_radius(tmp_path: Path) -> None:
     opts = DuplicateFinderOptions(include_exact=False, include_perceptual=True, phash_max_hamming=1, dhash_max_hamming=1)
     groups = build_groups_from_records([ra, rb], opts)
     assert len(groups) == 1
+
+
+def test_video_multiframe_grouping_finds_shifted_frame_match(tmp_path: Path) -> None:
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    h0 = imagehash.hex_to_hash("0000000000000000")
+    h1 = imagehash.hex_to_hash("ffffffffffffffff")
+
+    ra = FileDupInfo(
+        path=a,
+        path_norm=str(a.resolve()),
+        size_bytes=1,
+        mtime_ns=1,
+        width=1280,
+        height=720,
+        sha256="x",
+        phash=h0,
+        dhash=h0,
+        phash_frames=[h0, h1],
+    )
+    rb = FileDupInfo(
+        path=b,
+        path_norm=str(b.resolve()),
+        size_bytes=1,
+        mtime_ns=1,
+        width=1280,
+        height=720,
+        sha256="y",
+        phash=h1,
+        dhash=h1,
+        phash_frames=[h1, h0],
+    )
+    opts = DuplicateFinderOptions(
+        include_exact=False,
+        include_perceptual=True,
+        phash_max_hamming=4,
+        phash_video_mean_max=1,
+    )
+
+    groups = build_groups_from_records([ra, rb], opts)
+
+    assert len(groups) == 1
+    assert groups[0].paths == [a, b]

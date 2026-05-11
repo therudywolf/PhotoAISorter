@@ -32,12 +32,16 @@ def test_sort_worker_clamps_workers_1_to_4(tmp_path: Path) -> None:
     q = Queue()
     w0 = SortWorker(db, q, api_base="http://x", model="m", workers=0)
     w9 = SortWorker(db, q, api_base="http://x", model="m", workers=9)
+    w_over = SortWorker(db, q, api_base="http://x", model="m", workers=20)
     a0 = SortWorker(db, q, api_base="http://x", model="m", api_workers=0)
     a9 = SortWorker(db, q, api_base="http://x", model="m", api_workers=9)
+    a_over = SortWorker(db, q, api_base="http://x", model="m", api_workers=20)
     assert w0.workers == 1
-    assert w9.workers == 4
+    assert w9.workers == 9
+    assert w_over.workers == 16
     assert a0.api_workers == 1
-    assert a9.api_workers == 4
+    assert a9.api_workers == 9
+    assert a_over.api_workers == 16
     db.close()
 
 
@@ -187,6 +191,67 @@ def test_sort_worker_retries_uncategorized_then_succeeds(tmp_path: Path, monkeyp
 
     assert attempts["n"] == 3
     assert (dst / "vehicles_and_racing" / "a.jpg").exists()
+    db.close()
+
+
+def test_sort_worker_video_structured_uses_contact_sheet_once(tmp_path: Path, monkeypatch: object) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    f = src / "a.mp4"
+    f.write_bytes(b"fake-video")
+
+    calls = {"chat": 0}
+
+    def fake_chat(*_a: object, **_k: object) -> str:
+        calls["chat"] += 1
+        return '{"primary_category": "vehicles_and_racing", "confidence": 0.86}'
+
+    monkeypatch.setattr("app.worker.extract_frames_reduced", lambda *_a, **_k: [object(), object()])
+    monkeypatch.setattr("app.worker.video_contact_sheet_data_uri", lambda _frames: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+
+    db = Database(tmp_path / "state.sqlite3")
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=1)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.VIDEO_ONLY)
+
+    assert calls == {"chat": 1}
+    assert (dst / "vehicles_and_racing" / "a.mp4").exists()
+    db.close()
+
+
+def test_sort_worker_video_structured_falls_back_to_single_frame_on_api_error(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    f = src / "a.mp4"
+    f.write_bytes(b"fake-video")
+
+    calls = {"chat": 0}
+
+    def fake_chat(*_a: object, **_k: object) -> str:
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            raise RuntimeError("400 Bad Request")
+        return '{"primary_category": "vehicles_and_racing", "confidence": 0.86}'
+
+    monkeypatch.setattr("app.worker.extract_frames_reduced", lambda *_a, **_k: [object(), object()])
+    monkeypatch.setattr("app.worker.video_contact_sheet_data_uri", lambda _frames: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr("app.worker.pil_image_to_jpeg_data_uri", lambda *_a, **_k: "data:image/jpeg;base64,AA==")
+    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+
+    db = Database(tmp_path / "state.sqlite3")
+    q = Queue()
+    w = SortWorker(db, q, api_base="http://x", model="m", workers=1)
+    w.run_batch(src, dst, "", media_mode=MediaScanMode.VIDEO_ONLY)
+
+    assert calls == {"chat": 2}
+    assert (dst / "vehicles_and_racing" / "a.mp4").exists()
     db.close()
 
 

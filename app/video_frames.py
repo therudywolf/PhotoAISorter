@@ -39,7 +39,7 @@ def _subprocess_run_common_kw() -> dict[str, object]:
     return {}
 
 
-_FRAME_CACHE: OrderedDict[tuple[str, int], list[Image.Image]] = OrderedDict()
+_FRAME_CACHE: OrderedDict[tuple[str, int, int, int], list[Image.Image]] = OrderedDict()
 _FRAME_CACHE_LIMIT = 96
 
 
@@ -79,6 +79,29 @@ def video_sample_times_sec(duration_sec: float, k: int) -> list[float]:
         t = max(0.0, min(t, max(0.0, duration_sec - eps)))
         out.append(t)
     return out
+
+
+def _fallback_sample_times_sec(duration_sec: float, primary: list[float]) -> list[float]:
+    """Extra seek points used only when one of the primary samples fails to decode."""
+    if duration_sec <= 0.001:
+        return []
+    eps = 1e-3
+    primary_rounded = {round(x, 3) for x in primary}
+    out: list[float] = []
+    for frac in (0.9, 0.1, 0.75, 0.25, 0.66, 0.33):
+        t = max(0.0, min(float(frac) * duration_sec, max(0.0, duration_sec - eps)))
+        if round(t, 3) in primary_rounded:
+            continue
+        out.append(t)
+    return out
+
+
+def _frame_cache_key(path: Path, n: int) -> tuple[str, int, int, int]:
+    try:
+        st = path.stat()
+        return (str(path.resolve()), int(n), int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        return (str(path.resolve()), int(n), 0, 0)
 
 
 def resolve_ffmpeg_executable() -> str | None:
@@ -169,6 +192,31 @@ def ffprobe_duration_sec(path: Path, on_log: LogFn = _noop_log) -> float | None:
         return None
 
 
+def diagnose_media_decode(path: Path, n: int = VIDEO_FRAME_COUNT) -> dict[str, object]:
+    """Collect a compact decode report for one image/video/GIF file."""
+    logs: list[str] = []
+    p = Path(path)
+    n = max(1, min(int(n), _MEDIA_EXTRACT_FRAME_CAP))
+    ffmpeg = resolve_ffmpeg_executable()
+    ffprobe = resolve_ffprobe_executable()
+    duration = ffprobe_duration_sec(p, logs.append) if p.exists() and p.suffix.lower() in VIDEO_EXTENSIONS else None
+    frames = extract_frames_for_classification(p, n, on_log=logs.append) if p.exists() else []
+    sizes = [f"{im.size[0]}x{im.size[1]}" for im in frames]
+    return {
+        "path": str(p),
+        "exists": p.exists(),
+        "suffix": p.suffix.lower(),
+        "size_bytes": p.stat().st_size if p.exists() and p.is_file() else None,
+        "ffmpeg": ffmpeg or "",
+        "ffprobe": ffprobe or "",
+        "duration_sec": duration,
+        "wanted_frames": n,
+        "decoded_frames": len(frames),
+        "frame_sizes": sizes,
+        "logs": logs,
+    }
+
+
 def _ffmpeg_frame_at(path: Path, t_sec: float, ffmpeg: str) -> Image.Image | None:
     # -ss перед -i: input seek, без прогона с начала; -t ограничивает объём декода
     cmd = [
@@ -219,6 +267,13 @@ def _ffmpeg_frames(path: Path, n: int, on_log: LogFn) -> list[Image.Image]:
         im = _ffmpeg_frame_at(path, t, ffmpeg)
         if im is not None:
             out.append(im)
+    if len(out) < n and dur is not None:
+        for t in _fallback_sample_times_sec(dur, times):
+            if len(out) >= n:
+                break
+            im = _ffmpeg_frame_at(path, t, ffmpeg)
+            if im is not None:
+                out.append(im)
     if not out:
         on_log("video preview: sampled decode failed, trying frame at t=0")
         im = _ffmpeg_frame_at(path, 0.0, ffmpeg)
@@ -308,12 +363,12 @@ def extract_frames_for_classification(
         imgs = _ffmpeg_frames(path, n, on_log)
         if len(imgs) >= 1:
             if len(imgs) < n:
-                on_log(f"rollback: decoded {len(imgs)} frame(s), wanted {n}")
+                on_log(f"video frames: decoded {len(imgs)} of {n}; continuing with available frames")
             return imgs[:n]
         imgs = _opencv_frames(path, n, on_log)
         if len(imgs) >= 1:
             if len(imgs) < n:
-                on_log(f"rollback: opencv got {len(imgs)} frame(s) from {n}")
+                on_log(f"video frames: opencv decoded {len(imgs)} of {n}; continuing with available frames")
             return imgs[:n]
         on_log("video preview: no frames from ffmpeg or opencv")
         return []
@@ -358,7 +413,7 @@ def extract_frames_reduced(
     on_log: LogFn = _noop_log,
 ) -> list[Image.Image]:
     """Try n, then n-1 ... 1 until at least one frame or empty."""
-    key = (str(path.resolve()), int(max(1, n)))
+    key = _frame_cache_key(path, int(max(1, n)))
     cached = _FRAME_CACHE.get(key)
     if cached is not None:
         _FRAME_CACHE.move_to_end(key)

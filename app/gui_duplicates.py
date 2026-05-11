@@ -399,7 +399,11 @@ class DuplicatesPane(ctk.CTkFrame):
         self._lbl_delete_count.pack(side="left", padx=(0, 16))
         row_act2 = ctk.CTkFrame(top, fg_color="transparent")
         row_act2.pack(fill="x", padx=8, pady=(0, 8))
-        self._btn_apply_suggested = ctk.CTkButton(row_act, text=ui_t("dup.delete.apply_suggested"), command=self._apply_suggested_deletes_wrap)
+        self._btn_apply_suggested = ctk.CTkButton(
+            row_act2,
+            text=ui_t("dup.delete.apply_suggested"),
+            command=self._apply_suggested_deletes_wrap,
+        )
         self._btn_apply_suggested.pack(side="left", padx=(0, 8))
         self._btn_preview = ctk.CTkButton(row_act2, text=ui_t("dup.delete.preview"), command=self._preview_delete)
         self._btn_preview.pack(side="left", padx=(0, 8))

@@ -12,18 +12,12 @@ TEXTS: dict[str, str] = {
     "folders.output": "Папка для результата:",
     "folders.pick": "Выбрать...",
     "folders.process": "Что обрабатывать:",
-    "folders.speed": "Файловых потоков:",
-    "folders.api_workers": "ИИ-запросов одновременно:",
-    "folders.api_workers.hint": (
-        "Для LM Studio обычно безопаснее 1: несколько файлов могут готовиться параллельно, "
-        "но vision-запрос к локальной модели идёт по одному. Увеличивайте только если сервер реально держит параллельные запросы."
-    ),
     "folders.tag_mode.section": "Режим тегов",
     "folders.tag_mode.strict_radio": "Furry — фиксированные теги",
     "folders.tag_mode.general_radio": "Общий — расширенный пресет",
     "folders.tag_mode.auto_radio": "Автокатегории",
     "folders.tag_mode.free_radio": "Свободные теги нейросети",
-    "folders.tag_mode.show_list": "Показать список папок…",
+    "folders.tag_mode.show_list": "Список папок…",
     "folders.tag_mode.hint_strict": (
         "Пресет Furry: только ваш текущий фиксированный набор папок (кнопка «Показать список»). "
         "Подходит для больших коллекций: предсказуемая структура каталога."
@@ -47,7 +41,11 @@ TEXTS: dict[str, str] = {
     "sort.log_mode_general": "Режим папок: Общий (furry + расширенный фиксированный список).",
     "sort.log_mode_auto": "Режим папок: Автокатегории (модель предлагает новые стабильные папки).",
     "sort.log_mode_free": "Режим папок: свободные теги (модель может создавать новые папки).",
-    "sort.review_first": "Review-first",
+    "sort.review_first": "Только отчёт",
+    "sort.review_first.hint": "Проверочный запуск без копирования: категории попадут в manifest в папке результата.",
+    "sort.review.open": "Отчёты…",
+    "sort.review.pick": "Выберите manifest.jsonl из _review_runs",
+    "sort.review.title": "Отчёт Review-first",
     "sort.warn_large_library_free": (
         "Подсказка: при 50k+ файлов свободный режим может раздувать число папок; "
         "кеш по хешу ускоряет повторный прогон, но первый проход всё равно вызывает API по каждому новому файлу."
@@ -92,26 +90,30 @@ TEXTS: dict[str, str] = {
     "buttons.pause": "Пауза",
     "buttons.resume": "Продолжить",
     "buttons.stop": "Стоп/сохранить",
-    "buttons.clear_cache": "Очистить кеш",
+    "buttons.clear_cache": "Кеш…",
     "eta.left": "Осталось: —",
     "eta.estimate_after_first": "Осталось: оценка после первого файла...",
     "eta.approx": "Осталось примерно: {eta}",
     "eta.counting": "Осталось: считаю...",
     "health.idle": "LM health: —",
-    "health.api": "LM health: запросов {calls}, avg {avg} с, ошибок {errors}, LM-параллель {api_workers}, review {review}",
+    "health.api": "LM health: запросов {calls}, avg {avg} с, ошибок {errors}, review {review}",
     "log.title": "Лог:",
     "cache.warn_busy": "Недоступно",
     "cache.warn_stop_first": "Остановите сортировку перед очисткой кеша.",
     "cache.warn_probe_wait": "Дождитесь завершения проверки API.",
     "cache.ask.title": "Очистка кеша",
-    "cache.ask.text": "Что очистить?\n\nДа — кеш сортировки\nНет — кеш дубликатов\nОтмена — оба кеша",
+    "cache.ask.text": "Что очистить?\n\nДа — кеш сортировки\nНет — кеш дубликатов\nОтмена — ничего не менять",
     "cache.log.cleared_sort": "Кеш сортировки очищен (записей: {count}).",
     "cache.log.cleared_dup": "Кеш дубликатов очищен (сигнатур: {count}).",
     "cache.log.cleared_both": "Оба кеша очищены (сортировка: {sort_count}, дубликаты: {dup_count}).",
+    "cache.log.cancelled": "Очистка кеша отменена.",
     "cache.error": "Ошибка",
     "vision.meta.yes": "метаданные: vision",
     "vision.meta.no": "метаданные: вероятно текст",
     "vision.meta.none": "метаданные: нет данных",
+    "video.diagnose": "Диагностика видео…",
+    "video.diagnose.title": "Диагностика видео",
+    "video.diagnose.filetypes": "Видео и GIF",
     # --- Дубликаты: секции и общие ---
     "dup.section.source": "1. Источник и режим",
     "dup.section.accuracy": "2. Режим поиска, политика «оставить» и LLM",

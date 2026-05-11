@@ -42,21 +42,64 @@ def _pil_to_rgb(im: Image.Image) -> Image.Image:
     return im.convert("RGB")
 
 
-def pil_image_to_jpeg_data_uri(im: Image.Image) -> str:
+def pil_image_to_jpeg_data_uri(
+    im: Image.Image,
+    *,
+    max_side: int = MAX_IMAGE_SIDE,
+    quality: int = JPEG_QUALITY,
+) -> str:
     """Resize PIL image to max side, encode JPEG, return data URI."""
     im = _pil_to_rgb(im)
     w, h = im.size
     long_side = max(w, h)
-    if long_side > MAX_IMAGE_SIDE:
-        scale = MAX_IMAGE_SIDE / float(long_side)
+    max_side = max(64, int(max_side))
+    if long_side > max_side:
+        scale = max_side / float(long_side)
         nw = max(1, int(round(w * scale)))
         nh = max(1, int(round(h * scale)))
         im = im.resize((nw, nh), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    im.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    im.save(buf, format="JPEG", quality=max(35, min(95, int(quality))), optimize=True)
     raw = buf.getvalue()
     b64 = base64.b64encode(raw).decode("ascii")
     return f"data:image/jpeg;base64,{b64}"
+
+
+def video_contact_sheet_data_uri(
+    frames: list[Image.Image],
+    *,
+    max_frames: int = 3,
+    tile_max_side: int = 512,
+    output_max_side: int = 1024,
+    quality: int = 76,
+) -> str:
+    """Pack chronological video frames into one compact JPEG for single-image vision APIs."""
+    selected = [im for im in frames[: max(1, int(max_frames))] if im is not None]
+    if not selected:
+        raise ValueError("no frames")
+    tiles: list[Image.Image] = []
+    tile_max_side = max(128, min(768, int(tile_max_side)))
+    for im in selected:
+        rgb = _pil_to_rgb(im)
+        w, h = rgb.size
+        long_side = max(w, h)
+        if long_side > tile_max_side:
+            scale = tile_max_side / float(long_side)
+            rgb = rgb.resize(
+                (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+                Image.Resampling.LANCZOS,
+            )
+        tiles.append(rgb.copy())
+    gap = 8
+    width = sum(im.size[0] for im in tiles) + gap * (len(tiles) - 1)
+    height = max(im.size[1] for im in tiles)
+    sheet = Image.new("RGB", (width, height), (8, 10, 12))
+    x = 0
+    for tile in tiles:
+        y = (height - tile.size[1]) // 2
+        sheet.paste(tile, (x, y))
+        x += tile.size[0] + gap
+    return pil_image_to_jpeg_data_uri(sheet, max_side=output_max_side, quality=quality)
 
 
 def image_to_jpeg_base64_data_uri(path: Path) -> str:

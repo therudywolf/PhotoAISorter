@@ -8,6 +8,7 @@ import tkinter.filedialog as filedialog
 import tkinter.messagebox as messagebox
 import json
 from pathlib import Path
+from typing import Callable
 
 import customtkinter as ctk
 
@@ -32,13 +33,11 @@ from app.task_state import TaskState
 from app.ui_texts import t
 from app.lm_studio import (
     benchmark_models,
-    find_model_object,
     full_api_self_test,
     list_models,
-    vision_hint_from_model_dict,
-    vision_self_test,
+    loaded_model_instances,
 )
-from app.video_frames import resolve_ffmpeg_executable
+from app.video_frames import diagnose_media_decode, resolve_ffmpeg_executable
 from app.worker import SortWorker
 
 
@@ -73,6 +72,22 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
         return False
 
 
+_MEDIA_MODE_LABELS = {
+    MediaScanMode.PHOTOS_ONLY.value: "Фото",
+    MediaScanMode.PHOTOS_AND_VIDEO.value: "Фото + видео",
+    MediaScanMode.VIDEO_ONLY.value: "Видео + GIF",
+}
+_MEDIA_MODE_VALUES = {v: k for k, v in _MEDIA_MODE_LABELS.items()}
+
+_TAG_MODE_LABELS = {
+    "general": "Общий",
+    "strict": "Furry",
+    "auto": "Авто",
+    "free": "Свободно",
+}
+_TAG_MODE_VALUES = {v: k for k, v in _TAG_MODE_LABELS.items()}
+
+
 class App(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
@@ -87,6 +102,10 @@ class App(ctk.CTk):
         self._cache_service = CacheService(self._db, self._sig_db)
         self._msg_queue: queue.Queue = queue.Queue()
         self._worker: SortWorker | None = None
+        self._workers: dict[str, SortWorker] = {}
+        self._run_labels: dict[str, str] = {}
+        self._run_progress: dict[str, tuple[int, int]] = {}
+        self._run_counter = 0
         self._running = False
         self._current_run_id: str | None = None
         self._dup_pane: DuplicatesPane | None = None
@@ -122,16 +141,19 @@ class App(ctk.CTk):
         if mm not in {m.value for m in MediaScanMode}:
             mm = MediaScanMode.PHOTOS_ONLY.value
         self._media_mode_var = ctk.StringVar(value=mm)
-        self._sort_workers_var = ctk.StringVar(value=str(saved.get("sort_workers", 3) or 3))
-        saved_api_workers = str(saved.get("api_workers", 1) or 1)
-        if saved_api_workers not in {"1", "2", "3", "4"}:
-            saved_api_workers = "1"
-        self._api_workers_var = ctk.StringVar(value=saved_api_workers)
+        self._media_mode_label_var = ctk.StringVar(
+            value=_MEDIA_MODE_LABELS.get(mm, _MEDIA_MODE_LABELS[MediaScanMode.PHOTOS_ONLY.value])
+        )
+        self._sort_workers_var = ctk.StringVar(value="3")
+        self._api_workers_var = ctk.StringVar(value="1")
         _saved_mode = str(saved.get("tag_mode", "") or "").strip()
         if _saved_mode not in {"strict", "general", "free", "auto"}:
             _saved_free = bool(saved.get("free_tag_mode", False))
             _saved_mode = "free" if _saved_free else "strict"
         self._tag_mode_var = ctk.StringVar(value=_saved_mode)
+        self._tag_mode_label_var = ctk.StringVar(
+            value=_TAG_MODE_LABELS.get(_saved_mode, _TAG_MODE_LABELS["strict"])
+        )
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))
         self._review_first_var = ctk.BooleanVar(value=bool(saved.get("review_first_sort", False)))
 
@@ -147,7 +169,7 @@ class App(ctk.CTk):
             self._context.insert("1.0", ctx)
         self._in_var.trace_add("write", lambda *_: self._update_start_state())
         self._out_var.trace_add("write", lambda *_: self._update_start_state())
-        self._media_mode_var.trace_add("write", lambda *_: self.after(0, self._update_ffmpeg_hint))
+        self._media_mode_var.trace_add("write", lambda *_: self.after(0, self._on_media_mode_value_changed))
         self._update_start_state()
         self._update_ffmpeg_hint()
         self._refresh_resume_sort_button()
@@ -200,36 +222,13 @@ class App(ctk.CTk):
         ctk.CTkLabel(row_mode, text=t("folders.process"), width=220, anchor="w").pack(side="left")
         mode_btns = ctk.CTkFrame(row_mode, fg_color="transparent")
         mode_btns.pack(side="left", fill="x", expand=True)
-        for val, label in (
-            (MediaScanMode.PHOTOS_ONLY.value, "Только фото"),
-            (MediaScanMode.PHOTOS_AND_VIDEO.value, "Фото + видео"),
-            (MediaScanMode.VIDEO_ONLY.value, "Только видео"),
-        ):
-            ctk.CTkRadioButton(
-                mode_btns,
-                text=label,
-                variable=self._media_mode_var,
-                value=val,
-            ).pack(side="left", padx=(0, 12))
+        ctk.CTkSegmentedButton(
+            mode_btns,
+            values=[_MEDIA_MODE_LABELS[m.value] for m in MediaScanMode],
+            variable=self._media_mode_label_var,
+            command=self._on_media_mode_label_change,
+        ).pack(side="left", fill="x", expand=True)
 
-        row_w = ctk.CTkFrame(folders, fg_color="transparent")
-        row_w.pack(fill="x", padx=8, pady=(0, 6))
-        ctk.CTkLabel(row_w, text=t("folders.speed"), width=220, anchor="w").pack(side="left")
-        ctk.CTkComboBox(row_w, values=["1", "2", "3", "4"], variable=self._sort_workers_var, width=90, state="readonly").pack(side="left")
-        ctk.CTkLabel(row_w, text=t("folders.api_workers"), width=190, anchor="w").pack(side="left", padx=(18, 4))
-        ctk.CTkComboBox(row_w, values=["1", "2", "3", "4"], variable=self._api_workers_var, width=90, state="readonly").pack(side="left")
-
-        row_w_hint = ctk.CTkFrame(folders, fg_color="transparent")
-        row_w_hint.pack(fill="x", padx=8, pady=(0, 6))
-        ctk.CTkLabel(
-            row_w_hint,
-            text=t("folders.api_workers.hint"),
-            anchor="w",
-            justify="left",
-            wraplength=820,
-            font=ctk.CTkFont(size=11),
-            text_color=("gray35", "gray65"),
-        ).pack(anchor="w")
 
         row_ff = ctk.CTkFrame(folders, fg_color="transparent")
         row_ff.pack(fill="x", padx=8, pady=(0, 4))
@@ -240,31 +239,32 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color=("gray35", "gray60"),
         )
-        self._ffmpeg_hint.pack(anchor="w")
+        self._ffmpeg_hint.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            row_ff,
+            text=t("video.diagnose"),
+            width=150,
+            fg_color=("gray75", "gray30"),
+            command=self._on_video_diagnose,
+        ).pack(side="right", padx=(8, 0))
 
         _section_label(folders, t("folders.tag_mode.section"))
         row_tag_mode = ctk.CTkFrame(folders, fg_color="transparent")
         row_tag_mode.pack(fill="x", padx=8, pady=(0, 4))
-        for idx, (val, label_key) in enumerate((
-            ("strict", "folders.tag_mode.strict_radio"),
-            ("general", "folders.tag_mode.general_radio"),
-            ("auto", "folders.tag_mode.auto_radio"),
-            ("free", "folders.tag_mode.free_radio"),
-        )):
-            ctk.CTkRadioButton(
-                row_tag_mode,
-                text=t(label_key),
-                variable=self._tag_mode_var,
-                value=val,
-            ).grid(row=idx // 2, column=idx % 2, sticky="w", padx=(0, 22), pady=(0, 6))
+        ctk.CTkSegmentedButton(
+            row_tag_mode,
+            values=[_TAG_MODE_LABELS[k] for k in ("general", "strict", "auto", "free")],
+            variable=self._tag_mode_label_var,
+            command=self._on_tag_mode_label_change,
+        ).pack(fill="x", expand=True)
         row_tag_btns = ctk.CTkFrame(folders, fg_color="transparent")
         row_tag_btns.pack(fill="x", padx=8, pady=(0, 4))
         ctk.CTkButton(
             row_tag_btns,
             text=t("folders.tag_mode.show_list"),
-            width=200,
+            width=150,
             command=self._show_canonical_tags_dialog,
-        ).pack(side="left")
+        ).pack(side="left", padx=(0, 8))
         self._tag_mode_hint = ctk.CTkLabel(
             folders,
             text="",
@@ -275,7 +275,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
         )
         self._tag_mode_hint.pack(fill="x", padx=8, pady=(0, 8))
-        self._tag_mode_var.trace_add("write", lambda *_: self.after(0, self._update_tag_mode_hint))
+        self._tag_mode_var.trace_add("write", lambda *_: self.after(0, self._on_tag_mode_value_changed))
         self._update_tag_mode_hint()
 
         lm = ctk.CTkFrame(P, fg_color=("gray90", "gray16"), corner_radius=8)
@@ -365,14 +365,16 @@ class App(ctk.CTk):
             text_color=("gray30", "gray70"),
         )
         self._vision_status.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self._btn_vision = ctk.CTkButton(row_vis, text="Проверить vision (карта)", width=175, command=self._on_check_vision)
-        self._btn_vision.pack(side="left", padx=(0, 8))
-        self._btn_vision_file = ctk.CTkButton(
-            row_vis, text="Тест с файлом…", width=140, command=self._on_vision_test_file
+        self._btn_selftest = ctk.CTkButton(row_vis, text="Проверить API", width=140, command=self._on_self_test)
+        self._btn_selftest.pack(side="left", padx=(0, 8))
+        self._btn_loaded_models = ctk.CTkButton(
+            row_vis,
+            text="Модели в памяти",
+            width=145,
+            fg_color=("gray75", "gray30"),
+            command=self._on_loaded_models,
         )
-        self._btn_vision_file.pack(side="left", padx=(0, 8))
-        self._btn_selftest = ctk.CTkButton(row_vis, text="Самотест API", width=130, command=self._on_self_test)
-        self._btn_selftest.pack(side="left")
+        self._btn_loaded_models.pack(side="left")
 
         ctk.CTkLabel(P, text="Контекст для ИИ (USER_CONTEXT):", anchor="w").pack(anchor="w", padx=12)
         self._context = ctk.CTkTextbox(P, height=90)
@@ -407,7 +409,7 @@ class App(ctk.CTk):
 
         btns = ctk.CTkFrame(P, fg_color="transparent")
         btns.pack(fill="x", **pad)
-        self._btn_start = ctk.CTkButton(btns, text=t("buttons.start"), command=self._on_start, state="disabled")
+        self._btn_start = ctk.CTkButton(btns, text=t("buttons.start"), width=130, command=self._on_start, state="disabled")
         self._btn_start.pack(side="left", padx=(0, 8))
         self._btn_resume_sort = ctk.CTkButton(
             btns,
@@ -421,21 +423,38 @@ class App(ctk.CTk):
         self._btn_pause.pack(side="left", padx=(0, 8))
         self._btn_stop = ctk.CTkButton(btns, text=t("buttons.stop"), command=self._on_stop, state="disabled")
         self._btn_stop.pack(side="left", padx=(0, 8))
+
+        sort_options = ctk.CTkFrame(P, fg_color="transparent")
+        sort_options.pack(fill="x", padx=12, pady=(0, 6))
+        self._chk_review_first = ctk.CTkCheckBox(
+            sort_options,
+            text=t("sort.review_first"),
+            variable=self._review_first_var,
+        )
+        self._chk_review_first.pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(
+            sort_options,
+            text=t("sort.review_first.hint"),
+            anchor="w",
+            text_color=("gray35", "gray65"),
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            sort_options,
+            text=t("sort.review.open"),
+            width=115,
+            fg_color=("gray75", "gray30"),
+            command=self._open_sort_review_manifest,
+        ).pack(side="right", padx=(12, 0))
         self._btn_clear_cache = ctk.CTkButton(
-            btns,
+            sort_options,
             text=t("buttons.clear_cache"),
-            width=160,
+            width=120,
             fg_color=("gray70", "gray35"),
             hover_color=("gray60", "gray45"),
             command=self._on_clear_hash_cache,
         )
-        self._btn_clear_cache.pack(side="left")
-        self._chk_review_first = ctk.CTkCheckBox(
-            btns,
-            text=t("sort.review_first"),
-            variable=self._review_first_var,
-        )
-        self._chk_review_first.pack(side="left", padx=(12, 0))
+        self._btn_clear_cache.pack(side="right")
 
         prog_row = ctk.CTkFrame(P, fg_color="transparent")
         prog_row.pack(fill="x", **pad)
@@ -473,6 +492,31 @@ class App(ctk.CTk):
         dup_scroll.pack(fill="both", expand=True)
         self._dup_pane = DuplicatesPane(dup_scroll, self)
         self._dup_pane.pack(fill="both", expand=True, padx=4, pady=4)
+
+    def _on_media_mode_label_change(self, label: str) -> None:
+        value = _MEDIA_MODE_VALUES.get(label)
+        if value:
+            self._media_mode_var.set(value)
+
+    def _on_media_mode_value_changed(self) -> None:
+        label = _MEDIA_MODE_LABELS.get(
+            self._media_mode_var.get(),
+            _MEDIA_MODE_LABELS[MediaScanMode.PHOTOS_ONLY.value],
+        )
+        if self._media_mode_label_var.get() != label:
+            self._media_mode_label_var.set(label)
+        self._update_ffmpeg_hint()
+
+    def _on_tag_mode_label_change(self, label: str) -> None:
+        value = _TAG_MODE_VALUES.get(label)
+        if value:
+            self._tag_mode_var.set(value)
+
+    def _on_tag_mode_value_changed(self) -> None:
+        label = _TAG_MODE_LABELS.get(self._tag_mode_var.get(), _TAG_MODE_LABELS["strict"])
+        if self._tag_mode_label_var.get() != label:
+            self._tag_mode_label_var.set(label)
+        self._update_tag_mode_hint()
 
     def _update_tag_mode_hint(self) -> None:
         mode = self._tag_mode_var.get()
@@ -516,10 +560,10 @@ class App(ctk.CTk):
         self._probe_busy = busy
         st = "disabled" if busy or self._running else "normal"
         self._btn_refresh.configure(state=st)
-        self._btn_vision.configure(state=st)
-        self._btn_vision_file.configure(state=st)
         self._btn_selftest.configure(state=st)
         self._btn_clear_cache.configure(state="disabled" if busy or self._running else "normal")
+        if hasattr(self, "_btn_loaded_models"):
+            self._btn_loaded_models.configure(state="disabled" if busy else "normal")
         if hasattr(self, "_btn_benchmark"):
             self._btn_benchmark.configure(state=st)
         if hasattr(self, "_btn_profile_save"):
@@ -548,77 +592,9 @@ class App(ctk.CTk):
                 n = self._cache_service.clear_duplicate_cache()
                 self._append_log(t("cache.log.cleared_dup", count=n))
             else:
-                # None = «Отмена» в диалоге: очистить оба кеша (см. cache.ask.text)
-                a, b = self._cache_service.clear_all()
-                self._append_log(t("cache.log.cleared_both", sort_count=a, dup_count=b))
+                self._append_log(t("cache.log.cancelled"))
         except OSError as e:
             messagebox.showerror(t("cache.error"), str(e))
-
-    def _on_vision_test_file(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Файл для проверки vision",
-            filetypes=[
-                (
-                    "Изображения и видео",
-                    "*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.heic *.heif *.avif "
-                    "*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif",
-                ),
-                ("Все файлы", "*.*"),
-            ],
-        )
-        if not path:
-            return
-        base = self._api_var.get().strip() or DEFAULT_API_BASE
-        model = self._model_resolved()
-
-        def work() -> None:
-            self.after(0, lambda: self._set_probe_busy(True))
-            try:
-                meta = None
-                try:
-                    meta = find_model_object(base, model, api_key=self._api_key_resolved()) if model else None
-                except Exception:
-                    meta = None
-                hint = vision_hint_from_model_dict(meta) if isinstance(meta, dict) else None
-                ok, detail = vision_self_test(
-                    base,
-                    model,
-                    api_key=self._api_key_resolved(),
-                    image_path=path,
-                )
-
-                def apply() -> None:
-                    if hint is True:
-                        hint_txt = t("vision.meta.yes")
-                    elif hint is False:
-                        hint_txt = t("vision.meta.no")
-                    else:
-                        hint_txt = t("vision.meta.none")
-                    if ok:
-                        self._vision_status.configure(
-                            text=f"Vision: OK ({hint_txt})",
-                            text_color=("green", "#6abf69"),
-                        )
-                        self._append_log(f"Vision OK (файл) [{hint_txt}]: {detail}")
-                    else:
-                        self._vision_status.configure(
-                            text=t("lm.vision.error", hint=hint_txt),
-                            text_color=("darkred", "#ff7b7b"),
-                        )
-                        self._append_log(f"Vision FAIL (файл) [{hint_txt}]: {detail}")
-                    self._set_probe_busy(False)
-
-                self.after(0, apply)
-            except Exception as e:
-                def fail() -> None:
-                    self._vision_status.configure(text=t("lm.vision.error_short"), text_color=("darkred", "#ff7b7b"))
-                    self._append_log(f"Vision (файл): {e!s}")
-                    self._set_probe_busy(False)
-
-                self.after(0, fail)
-
-        threading.Thread(target=work, daemon=True).start()
-        self._append_log(f"Проверка vision файлом «{path}», модель «{model}»...")
 
     def _update_ffmpeg_hint(self) -> None:
         try:
@@ -645,6 +621,132 @@ class App(ctk.CTk):
                 text_color=("goldenrod", "#c9a227"),
             )
 
+    def _on_video_diagnose(self) -> None:
+        path = filedialog.askopenfilename(
+            title=t("video.diagnose.title"),
+            filetypes=[
+                (
+                    t("video.diagnose.filetypes"),
+                    "*.mp4 *.mov *.mkv *.webm *.avi *.m4v *.gif *.3gp *.mts *.m2ts *.mpg *.mpeg",
+                ),
+                ("Все файлы", "*.*"),
+            ],
+        )
+        if not path:
+            return
+
+        def work() -> None:
+            try:
+                report = diagnose_media_decode(Path(path))
+            except Exception as e:
+                self.after(0, lambda: self._append_log(f"Диагностика видео: {e!s}"))
+                return
+            self.after(0, lambda: self._show_video_diagnostic(report))
+
+        threading.Thread(target=work, daemon=True).start()
+        self._append_log(f"Диагностика видео: {path}")
+
+    def _show_video_diagnostic(self, report: dict[str, object]) -> None:
+        lines = [
+            f"Файл: {report.get('path', '')}",
+            f"Существует: {'да' if report.get('exists') else 'нет'}",
+            f"Расширение: {report.get('suffix') or '—'}",
+            f"Размер: {report.get('size_bytes') or '—'} байт",
+            f"ffmpeg: {report.get('ffmpeg') or 'не найден'}",
+            f"ffprobe: {report.get('ffprobe') or 'не найден'}",
+            f"Длительность: {report.get('duration_sec') if report.get('duration_sec') is not None else '—'} сек",
+            f"Кадры: {report.get('decoded_frames')} из {report.get('wanted_frames')}",
+            f"Размеры кадров: {', '.join(report.get('frame_sizes') or []) or '—'}",
+        ]
+        logs = report.get("logs") or []
+        if logs:
+            lines.append("")
+            lines.append("Лог декодирования:")
+            lines.extend(str(x) for x in logs)
+        text = "\n".join(lines)
+        self._append_log(f"Диагностика видео: кадры {report.get('decoded_frames')} из {report.get('wanted_frames')}")
+
+        win = ctk.CTkToplevel(self)
+        win.title(t("video.diagnose.title"))
+        win.geometry("760x520")
+        win.transient(self)
+        tb = ctk.CTkTextbox(win, font=ctk.CTkFont(size=12))
+        tb.pack(fill="both", expand=True, padx=12, pady=(12, 8))
+        tb.insert("1.0", text)
+        tb.configure(state="disabled")
+        ctk.CTkButton(win, text=t("buttons.close"), command=win.destroy).pack(pady=(0, 12))
+
+    def _open_sort_review_manifest(self) -> None:
+        out_dir = Path(self._out_var.get().strip()) if self._out_var.get().strip() else Path.cwd()
+        initial_dir = out_dir / "_review_runs"
+        if not initial_dir.exists():
+            initial_dir = out_dir if out_dir.exists() else Path.cwd()
+        path = filedialog.askopenfilename(
+            title=t("sort.review.pick"),
+            initialdir=str(initial_dir),
+            filetypes=[("Review manifest", "manifest.jsonl"), ("JSONL", "*.jsonl"), ("Все файлы", "*.*")],
+        )
+        if not path:
+            return
+        self._show_sort_review_manifest(Path(path))
+
+    def _show_sort_review_manifest(self, path: Path) -> None:
+        rows: list[dict[str, object]] = []
+        total = 0
+        category_counts: dict[str, int] = {}
+        needs_review = 0
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    total += 1
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    cat = str(row.get("category") or "uncategorized")
+                    category_counts[cat] = category_counts.get(cat, 0) + 1
+                    if bool(row.get("needs_review")):
+                        needs_review += 1
+                    if len(rows) < 1000:
+                        rows.append(row)
+        except OSError as e:
+            messagebox.showerror(t("cache.error"), str(e))
+            return
+
+        lines = [
+            f"Файл: {path}",
+            f"Всего записей: {total}",
+            f"Требуют проверки: {needs_review}",
+            "",
+            "Категории:",
+        ]
+        for cat, count in sorted(category_counts.items(), key=lambda x: (-x[1], x[0]))[:80]:
+            lines.append(f"{count:>6}  {cat}")
+        lines.append("")
+        lines.append("Первые 1000 строк:")
+        for row in rows:
+            source = Path(str(row.get("source_path") or "")).name
+            cat = str(row.get("category") or "")
+            conf = row.get("confidence")
+            review = "review" if bool(row.get("needs_review")) else ""
+            reason = str(row.get("reason_short") or "")[:80]
+            lines.append(f"{cat:<32} {str(conf):<6} {review:<8} {source} {reason}")
+
+        win = ctk.CTkToplevel(self)
+        win.title(t("sort.review.title"))
+        win.geometry("940x680")
+        win.transient(self)
+        tb = ctk.CTkTextbox(win, font=ctk.CTkFont(family="Consolas", size=12))
+        tb.pack(fill="both", expand=True, padx=12, pady=(12, 8))
+        tb.insert("1.0", "\n".join(lines))
+        tb.configure(state="disabled")
+        ctk.CTkButton(win, text=t("buttons.close"), command=win.destroy).pack(pady=(0, 12))
+
     def _save_gui_settings(self) -> None:
         try:
             dup: dict = {}
@@ -659,8 +761,6 @@ class App(ctk.CTk):
                     "active_model_profile": self._active_model_profile_var.get().strip(),
                     "model_profiles": profiles_to_settings(self._model_profiles),
                     "media_mode": self._media_mode_var.get().strip(),
-                    "sort_workers": self._sort_workers_var.get().strip(),
-                    "api_workers": self._api_workers_var.get().strip(),
                     "tag_mode": self._tag_mode_var.get(),
                     "free_tag_mode": self._tag_mode_var.get() == "free",
                     "prompt_extra": self._prompt_extra_var.get().strip(),
@@ -774,19 +874,23 @@ class App(ctk.CTk):
             self._api_var.set(p.api_base)
         if p.model:
             self._model_manual_var.set(p.model)
-        self._sort_workers_var.set(str(p.workers))
         if p.prompt_extra:
             self._prompt_extra_var.set(p.prompt_extra)
         self._append_log(t("lm.profile.applied", name=p.name, model=p.model or DEFAULT_MODEL))
 
     def _save_current_model_profile(self) -> None:
         name = self._active_model_profile_var.get().strip() or "classifier"
+        current = self._model_profiles.get(name, self._active_profile())
         self._model_profiles[name] = ModelProfile(
             name=name,
-            role=self._model_profiles.get(name, self._active_profile()).role,
+            role=current.role,
             api_base=self._api_var.get().strip() or DEFAULT_API_BASE,
             model=self._model_resolved(),
-            workers=max(1, min(4, int(self._sort_workers_var.get().strip() or "3"))),
+            temperature=current.temperature,
+            max_tokens=current.max_tokens,
+            timeout_sec=current.timeout_sec,
+            workers=3,
+            api_workers=1,
             prompt_extra=self._prompt_extra_var.get().strip(),
         )
         self._profile_combo.configure(values=sorted(self._model_profiles.keys()))
@@ -956,54 +1060,6 @@ class App(ctk.CTk):
         threading.Thread(target=work, daemon=True).start()
         self._append_log("Запрос списка моделей...")
 
-    def _on_check_vision(self) -> None:
-        base = self._api_var.get().strip() or DEFAULT_API_BASE
-        model = self._model_resolved()
-
-        def work() -> None:
-            self.after(0, lambda: self._set_probe_busy(True))
-            try:
-                meta = None
-                try:
-                    meta = find_model_object(base, model, api_key=self._api_key_resolved()) if model else None
-                except Exception:
-                    meta = None
-                hint = vision_hint_from_model_dict(meta) if isinstance(meta, dict) else None
-                ok, detail = vision_self_test(base, model, api_key=self._api_key_resolved())
-
-                def apply() -> None:
-                    if hint is True:
-                        hint_txt = t("vision.meta.yes")
-                    elif hint is False:
-                        hint_txt = t("vision.meta.no")
-                    else:
-                        hint_txt = t("vision.meta.none")
-                    if ok:
-                        self._vision_status.configure(
-                            text=f"Vision: OK ({hint_txt})",
-                            text_color=("green", "#6abf69"),
-                        )
-                        self._append_log(f"Vision OK [{hint_txt}]: {detail}")
-                    else:
-                        self._vision_status.configure(
-                            text=t("lm.vision.error", hint=hint_txt),
-                            text_color=("darkred", "#ff7b7b"),
-                        )
-                        self._append_log(f"Vision FAIL [{hint_txt}]: {detail}")
-                    self._set_probe_busy(False)
-
-                self.after(0, apply)
-            except Exception as e:
-                def fail() -> None:
-                    self._vision_status.configure(text=t("lm.vision.error_short"), text_color=("darkred", "#ff7b7b"))
-                    self._append_log(f"Vision: {e!s}")
-                    self._set_probe_busy(False)
-
-                self.after(0, fail)
-
-        threading.Thread(target=work, daemon=True).start()
-        self._append_log(f"Проверка vision (встроенная тест-карта 512x512), модель «{model}»...")
-
     def _on_self_test(self) -> None:
         base = self._api_var.get().strip() or DEFAULT_API_BASE
         model = self._model_resolved()
@@ -1032,6 +1088,49 @@ class App(ctk.CTk):
 
         threading.Thread(target=work, daemon=True).start()
         self._append_log("Запуск самотеста API...")
+
+    def _active_requested_models(self) -> set[str]:
+        models = {self._model_resolved()}
+        for worker in self._workers.values():
+            if worker.is_alive():
+                models.add(worker.model)
+        return {m for m in models if m}
+
+    def _format_loaded_models(self, rows: list[dict[str, object]]) -> str:
+        if not rows:
+            return "LM Studio: загруженных моделей не найдено."
+        parts: list[str] = [f"LM Studio: загружено инстансов: {len(rows)}"]
+        by_key: dict[str, list[dict[str, object]]] = {}
+        for row in rows:
+            by_key.setdefault(str(row.get("model_key") or ""), []).append(row)
+        for key, items in sorted(by_key.items()):
+            dup = " duplicate" if len(items) > 1 else ""
+            parts.append(f"{key}: {len(items)}{dup}")
+            for item in items:
+                ttl = item.get("remaining_ttl_seconds")
+                ttl_txt = f", ttl={int(ttl)}s" if isinstance(ttl, (int, float)) else ""
+                parts.append(
+                    "  "
+                    f"{item.get('instance_id')} "
+                    f"(ctx={item.get('context_length')}, parallel={item.get('parallel')}{ttl_txt})"
+                )
+        return "\n".join(parts)
+
+    def _on_loaded_models(self) -> None:
+        base = self._api_var.get().strip() or DEFAULT_API_BASE
+
+        def work() -> None:
+            self.after(0, lambda: self._set_probe_busy(True))
+            try:
+                rows = loaded_model_instances(base, api_key=self._api_key_resolved())
+                text = self._format_loaded_models(rows)
+            except Exception as e:
+                text = f"LM Studio loaded models: ошибка {e!s}"
+            self.after(0, lambda: self._append_log(text))
+            self.after(0, lambda: self._set_probe_busy(False))
+
+        threading.Thread(target=work, daemon=True).start()
+        self._append_log("Проверяю загруженные модели LM Studio...")
 
     def _on_start(self, *, force_resume: bool = False) -> None:
         in_path = Path(self._in_var.get().strip())
@@ -1072,6 +1171,10 @@ class App(ctk.CTk):
         self._set_controls_running(True)
         self._done_files = 0
         self._total_files = 0
+        self._workers.clear()
+        self._run_labels.clear()
+        self._run_progress.clear()
+        self._run_counter = 0
         self._progress.set(0)
         self._prog_label.configure(text="0 / …")
         self._eta_label.configure(text=t("eta.estimate_after_first"))
@@ -1096,9 +1199,8 @@ class App(ctk.CTk):
             self._append_log(t("sort.warn_large_library_free"))
         self._save_gui_settings()
 
-        workers = max(1, min(4, int(self._sort_workers_var.get().strip() or "3")))
-        api_workers = max(1, min(4, int(self._api_workers_var.get().strip() or "1")))
-        self._append_log(f"Потоки файлов: {workers}; одновременных запросов к LM: {api_workers}.")
+        workers = 3
+        api_workers = 1
         profile = self._active_profile()
         aliases = load_category_aliases()
         self._worker = SortWorker(
@@ -1135,19 +1237,28 @@ class App(ctk.CTk):
             resume_session=resume_session,
         )
         self._current_run_id = self._worker.run_id
+        if self._worker.run_id:
+            self._workers[self._worker.run_id] = self._worker
+            self._run_labels[self._worker.run_id] = "main"
 
     def _on_pause(self) -> None:
-        if not self._worker:
+        workers = [w for w in self._workers.values() if w.is_alive()]
+        if not workers:
             return
-        paused = not self._worker.is_paused()
-        self._worker.set_paused(paused)
+        paused = not all(w.is_paused() for w in workers)
+        for worker in workers:
+            worker.set_paused(paused)
         self._btn_pause.configure(text=t("buttons.resume") if paused else t("buttons.pause"))
-        self._append_log("Пауза" if paused else "Продолжение")
+        self._append_log(("Пауза" if paused else "Продолжение") + f": {len(workers)} sort worker(s)")
 
     def _on_stop(self) -> None:
-        if self._worker:
-            self._worker.request_stop()
-            self._append_log("Стоп запрошен: прогресс сессии сохранится после текущего файла/запроса...")
+        workers = [w for w in self._workers.values() if w.is_alive()]
+        if workers:
+            for worker in workers:
+                worker.request_stop()
+            self._append_log(
+                f"Стоп запрошен для {len(workers)} sort worker(s): прогресс сохранится после текущего файла/запроса..."
+            )
 
     def _poll_queue(self) -> None:
         try:
@@ -1158,22 +1269,46 @@ class App(ctk.CTk):
             pass
         self.after(100, self._poll_queue)
 
+    def _run_log_prefix(self, run_id: object) -> str:
+        rid = str(run_id or "")
+        label = self._run_labels.get(rid, "")
+        if not label:
+            return ""
+        if label != "main" or len(self._run_labels) > 1:
+            return f"[{label}] "
+        return ""
+
+    def _refresh_aggregate_progress(self) -> None:
+        if not self._run_progress:
+            return
+        done = sum(v[0] for v in self._run_progress.values())
+        total = sum(v[1] for v in self._run_progress.values())
+        self._done_files = done
+        self._total_files = total
+        self._prog_label.configure(text=f"{done} / {total}")
+        if total > 0:
+            self._progress.set(min(1.0, done / float(total)))
+
     def _handle_msg(self, msg: dict) -> None:
         run_id = msg.get("run_id")
-        if self._running and self._current_run_id and run_id and run_id != self._current_run_id:
-            return
+        prefix = self._run_log_prefix(run_id)
         msg_type = msg.get("type")
         if msg_type == "scan_done":
-            self._total_files = int(msg.get("total", 0))
-            self._prog_label.configure(text=f"{self._done_files} / {self._total_files}")
+            total = int(msg.get("total", 0))
+            if run_id:
+                self._run_progress[str(run_id)] = (0, total)
+                self._refresh_aggregate_progress()
+            else:
+                self._total_files = total
+                self._prog_label.configure(text=f"{self._done_files} / {self._total_files}")
             self._eta_label.configure(text="Осталось: —")
             if self._total_files >= 50_000 and self._tag_mode_var.get() in {"auto", "free"}:
                 self._append_log(t("sort.warn_many_files_free", n=self._total_files))
         elif msg_type == "current":
             p = msg.get("path", "")
-            self._append_log(f"Файл: {p}")
+            self._append_log(f"{prefix}Файл: {p}")
         elif msg_type == "log":
-            text = str(msg.get("text", ""))
+            text = prefix + str(msg.get("text", ""))
             low = text.lower()
             is_channel = "channel error" in low or "channel closed" in low
             if is_channel:
@@ -1187,14 +1322,21 @@ class App(ctk.CTk):
                     self._flush_channel_error_summary()
                 self._append_log(text)
         elif msg_type == "progress":
-            self._done_files = int(msg.get("done", 0))
+            done = int(msg.get("done", 0))
             tot = int(msg.get("total", self._total_files or 1))
-            self._total_files = tot
-            self._prog_label.configure(text=f"{self._done_files} / {tot}")
-            if tot > 0:
-                self._progress.set(min(1.0, self._done_files / float(tot)))
+            if run_id:
+                self._run_progress[str(run_id)] = (done, tot)
+                self._refresh_aggregate_progress()
+            else:
+                self._done_files = done
+                self._total_files = tot
+                self._prog_label.configure(text=f"{self._done_files} / {tot}")
+                if tot > 0:
+                    self._progress.set(min(1.0, self._done_files / float(tot)))
             eta_sec = float(msg.get("eta_sec", 0) or 0)
-            if self._done_files > 0 and eta_sec > 0:
+            if len(self._run_progress) > 1:
+                self._eta_label.configure(text=t("eta.counting"))
+            elif self._done_files > 0 and eta_sec > 0:
                 self._eta_label.configure(text=t("eta.approx", eta=_format_eta(eta_sec)))
             elif self._done_files > 0 and tot > self._done_files:
                 self._eta_label.configure(text=t("eta.counting"))
@@ -1204,20 +1346,27 @@ class App(ctk.CTk):
             if self._channel_err_streak > 0:
                 self._flush_channel_error_summary()
             reason = msg.get("reason", "")
-            self._append_log(f"--- Готово ({reason}) ---")
-            self._eta_label.configure(text=t("eta.left"))
-            self._set_controls_running(False)
-            self._worker = None
-            self._current_run_id = None
-            self._update_start_state()
-            self._refresh_resume_sort_button()
-            self._save_gui_settings()
+            self._append_log(f"{prefix}--- Готово ({reason}) ---")
+            if run_id:
+                self._workers.pop(str(run_id), None)
+            remaining = [w for w in self._workers.values() if w.is_alive()]
+            if not remaining:
+                self._eta_label.configure(text=t("eta.left"))
+                self._set_controls_running(False)
+                self._worker = None
+                self._current_run_id = None
+                self._update_start_state()
+                self._refresh_resume_sort_button()
+                self._save_gui_settings()
+            else:
+                self._worker = remaining[-1]
+                self._current_run_id = self._worker.run_id
         elif msg_type == "session":
             status = str(msg.get("status", ""))
             done = int(msg.get("done", 0) or 0)
             total = int(msg.get("total", 0) or 0)
             if status and status != "running":
-                self._append_log(f"Сессия сортировки сохранена: {status}, {done}/{total}.")
+                self._append_log(f"{prefix}Сессия сортировки сохранена: {status}, {done}/{total}.")
         elif msg_type == "state_changed":
             state = str(msg.get("state", ""))
             if state == TaskState.PAUSED.value:
@@ -1227,7 +1376,7 @@ class App(ctk.CTk):
         elif msg_type == "metric":
             name = str(msg.get("name", "metric"))
             payload = msg.get("payload", {})
-            self._append_log(f"[metrics:{name}] {payload}")
+            self._append_log(f"{prefix}[metrics:{name}] {payload}")
         elif msg_type == "health":
             payload = msg.get("payload", {})
             self._health_label.configure(
@@ -1236,21 +1385,24 @@ class App(ctk.CTk):
                     calls=payload.get("api_calls", 0),
                     avg=payload.get("avg_api_sec", 0),
                     errors=payload.get("api_errors", 0),
-                    api_workers=payload.get("api_workers", self._api_workers_var.get()),
                     review=payload.get("needs_review", 0),
                 )
             )
 
     def on_close(self) -> None:
-        if self._worker:
-            self._worker.request_stop()
-            self._worker.join(5.0)
+        workers = [w for w in self._workers.values() if w.is_alive()]
+        if self._worker and self._worker not in workers:
+            workers.append(self._worker)
+        for worker in workers:
+            worker.request_stop()
+        for worker in workers:
+            worker.join(5.0)
         if self._dup_pane is not None:
             self._dup_pane.on_app_close()
         else:
             self._sig_db.close()
         self._save_gui_settings()
-        if not (self._worker and self._worker.is_alive()):
+        if not any(w.is_alive() for w in workers):
             self._db.close()
         self.destroy()
 

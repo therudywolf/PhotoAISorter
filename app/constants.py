@@ -381,8 +381,8 @@ REQUEST_CONNECT_TIMEOUT_SEC = 30.0
 REQUEST_READ_TIMEOUT_SEC = 600.0
 REQUEST_TIMEOUT_SEC = 600.0
 
-API_MAX_RETRIES = 3
-API_RETRY_BACKOFF_SEC: tuple[float, ...] = (2.0, 5.0)
+API_MAX_RETRIES = 5
+API_RETRY_BACKOFF_SEC: tuple[float, ...] = (1.5, 3.0, 5.0, 8.0)
 
 API_PROBE_TIMEOUT_SEC = 15
 VISION_TEST_TIMEOUT_SEC = 90
@@ -394,7 +394,7 @@ DEFAULT_MODEL = os.environ.get("PHOTO_AI_SORTER_MODEL", "local-model").strip() o
 
 LOG_MAX_LINES = 500
 
-PARALLEL_WORKERS = 3
+PARALLEL_WORKERS = 3  # file I/O threads; API concurrency controlled separately by api_workers
 
 ETA_ROLLING_WINDOW = 20
 

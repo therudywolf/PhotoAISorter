@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import random
 import re
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -36,6 +38,63 @@ from app.constants import (
     VISION_PROBE_MAX_TOKENS,
     VISION_TEST_TIMEOUT_SEC,
 )
+
+LM_STUDIO_MODELS_PATH = "/api/v1/models"
+LM_STUDIO_UNLOAD_PATH = "/api/v1/models/unload"
+
+
+class EndpointPool:
+    """Round-robin load balancer across multiple API base URLs.
+
+    Usage:
+        pool = EndpointPool(["http://server1:1234", "http://server2:1235"])
+        base = pool.next()  # returns next healthy endpoint
+    """
+
+    def __init__(self, endpoints: list[str] | str | None = None) -> None:
+        if endpoints is None:
+            self._endpoints: list[str] = []
+        elif isinstance(endpoints, str):
+            self._endpoints = [e.strip() for e in endpoints.split(",") if e.strip()]
+        else:
+            self._endpoints = [e.strip() for e in endpoints if e.strip()]
+        self._endpoints = [normalize_api_base(e) for e in self._endpoints]
+        self._cycle = itertools.cycle(self._endpoints) if self._endpoints else None
+        self._lock = threading.Lock()
+        self._error_until: dict[str, float] = {}
+
+    @property
+    def size(self) -> int:
+        return len(self._endpoints)
+
+    @property
+    def endpoints(self) -> list[str]:
+        return list(self._endpoints)
+
+    def next(self) -> str:
+        """Get next endpoint via round-robin, skipping temporarily unhealthy ones."""
+        if not self._endpoints:
+            return normalize_api_base("")
+        with self._lock:
+            now = time.monotonic()
+            for _ in range(len(self._endpoints)):
+                assert self._cycle is not None
+                ep = next(self._cycle)
+                cooldown_until = self._error_until.get(ep, 0.0)
+                if now >= cooldown_until:
+                    return ep
+            # All in cooldown — return the one with shortest remaining cooldown
+            return min(self._endpoints, key=lambda e: self._error_until.get(e, 0.0))
+
+    def mark_error(self, endpoint: str, cooldown_sec: float = 5.0) -> None:
+        """Mark endpoint as temporarily unhealthy after an error."""
+        with self._lock:
+            self._error_until[endpoint] = time.monotonic() + cooldown_sec
+
+    def mark_ok(self, endpoint: str) -> None:
+        """Clear error state for an endpoint."""
+        with self._lock:
+            self._error_until.pop(endpoint, None)
 
 
 def normalize_api_base(api_base: str) -> str:
@@ -78,6 +137,10 @@ def _raise_for_status_with_hint(response: requests.Response, endpoint: str) -> N
             hint = " (LM Studio requires a valid API key; paste it in the app or set PHOTO_AI_SORTER_API_KEY)"
         elif response.status_code == 404:
             hint = " (check LM Studio API base URL; use the server root such as http://10.77.77.2:29931)"
+        elif response.status_code == 400:
+            body = response.text.strip().replace("\n", " ")[:360]
+            if body:
+                hint = f" (bad request detail: {body})"
         raise requests.HTTPError(
             f"{response.status_code} {response.reason} at {endpoint}{hint}",
             response=response,
@@ -181,19 +244,32 @@ def _retryable_request_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
     if "channel error" in msg or "channel closed" in msg:
         return True
+    if "model reloaded" in msg or "model crashed" in msg:
+        return True
     if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
         return True
     if isinstance(exc, requests.HTTPError):
         resp = getattr(exc, "response", None)
-        return resp is not None and resp.status_code in (502, 503, 429)
+        if resp is not None and resp.status_code in (502, 503, 429):
+            return True
+        if resp is not None and resp.status_code == 400:
+            body = (resp.text or "").lower()
+            if "model reloaded" in body or "model crashed" in body or "exit code" in body:
+                return True
+        if resp is not None and resp.status_code == 500:
+            return True
     if isinstance(exc, ValueError):
         return True
     if isinstance(exc, requests.exceptions.ChunkedEncodingError):
         return True
     if isinstance(exc, requests.exceptions.RequestException):
-        # Generic transport failures from local proxies/runtimes.
         return True
     return False
+
+
+def _is_model_reload_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "model reloaded" in msg or "model crashed" in msg or "exit code" in msg
 
 
 def _run_completion_retries(
@@ -201,35 +277,50 @@ def _run_completion_retries(
     *,
     on_retry: Callable[[str], None] | None,
     attempt_label: str,
+    max_retries: int | None = None,
 ) -> str:
+    retries = max_retries if max_retries is not None else API_MAX_RETRIES
     last_exc: BaseException | None = None
     immediate_retry_done = False
-    for attempt in range(1, API_MAX_RETRIES + 1):
+    for attempt in range(1, retries + 1):
         try:
             return operation()
         except Exception as e:
             last_exc = e
             if not _retryable_request_error(e):
                 raise
-            if attempt >= API_MAX_RETRIES:
+            if attempt >= retries:
                 break
             msg = str(e).lower()
             is_channel_error = "channel error" in msg or "channel closed" in msg
+            is_reload = _is_model_reload_error(e)
+
+            if is_reload:
+                delay = min(12.0, 3.0 + attempt * 2.0)
+                if on_retry:
+                    on_retry(
+                        f"{attempt_label} {attempt}/{retries}: model reload/crash detected, "
+                        f"waiting {delay:.1f}s for recovery..."
+                    )
+                time.sleep(delay)
+                continue
+
             if is_channel_error and not immediate_retry_done:
                 immediate_retry_done = True
                 if on_retry:
                     on_retry("Channel Error detected, applying transient backoff (fast retry).")
+                time.sleep(0.5)
                 continue
+
             delay = (
                 API_RETRY_BACKOFF_SEC[attempt - 1]
                 if attempt - 1 < len(API_RETRY_BACKOFF_SEC)
                 else API_RETRY_BACKOFF_SEC[-1]
             )
-            # Jitter reduces synchronized retry storms under parallel load.
             jittered_delay = min(8.0, max(0.1, delay * (0.75 + random.random() * 0.5)))
             if on_retry:
                 on_retry(
-                    f"{attempt_label} {attempt}/{API_MAX_RETRIES}: {e!s} "
+                    f"{attempt_label} {attempt}/{retries}: {e!s} "
                     f"(через {jittered_delay:.1f} с)"
                 )
             time.sleep(jittered_delay)
@@ -831,6 +922,117 @@ def list_models(
         if isinstance(m, dict) and m.get("id"):
             ids.append(str(m["id"]))
     return sorted(set(ids), key=str.lower)
+
+
+def list_lm_studio_models(
+    api_base: str,
+    *,
+    api_key: str | None = None,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> list[dict[str, Any]]:
+    """LM Studio native model inventory with loaded instance metadata."""
+    base = normalize_api_base(api_base)
+    url = f"{base}{LM_STUDIO_MODELS_PATH}"
+    r = requests.get(url, headers=_auth_headers_get(api_key), timeout=timeout)
+    _raise_for_status_with_hint(r, LM_STUDIO_MODELS_PATH)
+    data = r.json()
+    models = data.get("models") or data.get("data") or []
+    return [m for m in models if isinstance(m, dict)]
+
+
+def loaded_model_instances(
+    api_base: str,
+    *,
+    api_key: str | None = None,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> list[dict[str, Any]]:
+    """Flatten LM Studio loaded_instances into rows useful for UI and cleanup."""
+    rows: list[dict[str, Any]] = []
+    for model in list_lm_studio_models(api_base, api_key=api_key, timeout=timeout):
+        key = str(model.get("key") or model.get("id") or "")
+        loaded = model.get("loaded_instances") or []
+        if not loaded and str(model.get("state") or "").lower() == "loaded":
+            loaded = [{"id": key, "config": {"context_length": model.get("loaded_context_length")}}]
+        if not isinstance(loaded, list):
+            continue
+        capabilities = model.get("capabilities") or {}
+        vision = capabilities.get("vision") if isinstance(capabilities, dict) else None
+        for inst in loaded:
+            if not isinstance(inst, dict):
+                continue
+            cfg = inst.get("config") if isinstance(inst.get("config"), dict) else {}
+            rows.append(
+                {
+                    "model_key": key,
+                    "instance_id": str(inst.get("id") or key),
+                    "display_name": str(model.get("display_name") or key),
+                    "context_length": cfg.get("context_length"),
+                    "parallel": cfg.get("parallel"),
+                    "remaining_ttl_seconds": inst.get("remaining_ttl_seconds"),
+                    "vision": vision,
+                }
+            )
+    return rows
+
+
+def unload_model_instance(
+    api_base: str,
+    instance_id: str,
+    *,
+    api_key: str | None = None,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> str:
+    """Unload one LM Studio loaded model instance by instance_id."""
+    instance_id = str(instance_id or "").strip()
+    if not instance_id:
+        raise ValueError("empty instance_id")
+    base = normalize_api_base(api_base)
+    url = f"{base}{LM_STUDIO_UNLOAD_PATH}"
+    r = requests.post(
+        url,
+        headers=_auth_headers_json(api_key),
+        data=json.dumps({"instance_id": instance_id}),
+        timeout=timeout,
+    )
+    _raise_for_status_with_hint(r, LM_STUDIO_UNLOAD_PATH)
+    data = r.json() if r.text.strip() else {}
+    return str(data.get("instance_id") or instance_id)
+
+
+def unload_duplicate_model_instances(
+    api_base: str,
+    *,
+    keep_models: set[str],
+    api_key: str | None = None,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> list[str]:
+    """
+    Unload LM Studio instances that are not needed for the active app workers.
+
+    For active model keys, keeps an exact active instance id when possible,
+    otherwise keeps the first loaded instance and unloads duplicates. For inactive
+    model keys, unloads all loaded instances.
+    """
+    keep_models = {str(m).strip() for m in keep_models if str(m).strip()}
+    keep_keys = {m.rsplit(":", 1)[0] if m.rsplit(":", 1)[-1].isdigit() else m for m in keep_models}
+    by_key: dict[str, list[dict[str, Any]]] = {}
+    for row in loaded_model_instances(api_base, api_key=api_key, timeout=timeout):
+        by_key.setdefault(str(row.get("model_key") or ""), []).append(row)
+    unloaded: list[str] = []
+    for key, rows in by_key.items():
+        is_active_key = key in keep_keys or any(str(r.get("instance_id") or "") in keep_models for r in rows)
+        if not is_active_key:
+            keep_id = ""
+        else:
+            exact_keep = next((r for r in rows if str(r.get("instance_id") or "") in keep_models), None)
+            keep = exact_keep or rows[0]
+            keep_id = str(keep.get("instance_id") or "")
+        for row in rows:
+            instance_id = str(row.get("instance_id") or "")
+            if not instance_id or instance_id == keep_id:
+                continue
+            unloaded.append(unload_model_instance(api_base, instance_id, api_key=api_key, timeout=timeout))
+    return unloaded
 
 
 def benchmark_models(
