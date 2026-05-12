@@ -127,18 +127,7 @@ _AUTO_COLLAPSE_TO_PRESET: dict[str, str] = {
 }
 
 
-def _strip_thinking_sections(text: str) -> str:
-    if not text:
-        return ""
-    cleaned = text
-    cleaned = re.sub(r"(?is)<think>.*?</think>", " ", cleaned)
-    cleaned = re.sub(r"(?is)<think>.*$", " ", cleaned)
-    cleaned = re.sub(r"(?is)<\|channel\>\s*thought\b.*?<channel\|>", " ", cleaned)
-    cleaned = re.sub(r"(?is)<\|channel\|>\s*(?:analysis|thought)\b.*?<\|channel\|>\s*final\b", " ", cleaned)
-    cleaned = re.sub(r"(?im)^\s*<think>\s*$", " ", cleaned)
-    cleaned = re.sub(r"(?im)^\s*</think>\s*$", " ", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned.strip()
+from app.text_utils import strip_thinking_sections as _strip_thinking_sections
 
 
 def _canonical_tag(tag: str) -> str:

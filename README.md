@@ -1,27 +1,29 @@
 # Photo AI Sorter
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 Local desktop tool for sorting mixed photo/video libraries with a vision model, finding duplicates, and reviewing risky cleanup decisions before deleting files.
 
-The app is designed for private local media libraries that may contain personal photos, screenshots, generated images, downloaded archives, memes, videos, GIFs, and duplicates.
+The app is designed for private local media libraries that may contain personal photos, screenshots, generated images, downloaded archives, memes, videos, GIFs, and duplicates. All processing happens locally — no data leaves your machine.
 
-## Current Features
+## Features
 
 - Photo, video, and GIF scanning.
-- Local vision classification through an OpenAI-compatible LM Studio API.
-- Four tag modes:
-  - `Furry`: the original fixed built-in category list.
-  - `General`: `Furry` plus a broader fixed preset for geek, IT, car culture, fitness, nightlife, and LGBTQ+ galleries.
-  - `Auto categories`: stabilized model-generated folders.
-  - `Free model tags`: unrestricted model folders for experiments.
+- Local vision classification through any OpenAI-compatible API (LM Studio, Ollama, etc.).
+- Five tag modes:
+  - **Furry** — fixed built-in category list.
+  - **General** — broader preset for geek, IT, car culture, fitness, nightlife, LGBTQ+ galleries.
+  - **Auto categories** — stabilized model-generated folder names.
+  - **Free model tags** — unrestricted hierarchical tags for experiments.
+  - **Custom list** — user-defined tag sets with optional recognition descriptions.
+- User-defined tag sets: create named collections of output categories, each with an optional description that tells the model what to look for.
 - Structured JSON classification with legacy tag fallback.
 - Model profiles for classifier, duplicate verifier, screenshot OCR, and quick preview roles.
-- Lightweight LM Studio vision benchmark for choosing a model.
-- Prompt composer and editable auto-category aliases.
+- Editable auto-category aliases.
 - Review-first sort manifests under `_review_runs`.
 - Resumable sort sessions with saved progress after stop, crash, or reboot.
 - LM health telemetry in the GUI.
-- Separate file-worker and LM-request concurrency limits. Keep LM requests at `1` for LM Studio unless your server is known to handle parallel vision calls.
-- Hash cache for resumable sorting.
+- Hash cache for instant skipping of already-sorted files.
 - Exact and perceptual duplicate detection.
 - Semantic/colorhash duplicate candidates for deep LLM verification.
 - Optional LLM verification for ambiguous duplicate pairs.
@@ -105,9 +107,7 @@ Recommended model characteristics:
 - Low hallucination on short tag-only outputs.
 - Enough context to process the classification prompt.
 
-Use `Benchmark` after refreshing models to probe the first visible candidates with the built-in vision test card. The best model is written into the active model profile.
-
-For LM Studio stability, start with `ИИ-запросов одновременно = 1`. You may still use several file workers; the app will prepare/hash/copy files in parallel while serializing calls to the local model. Increase the LM-request limit only when the server has multiple reliable model instances or a backend that supports concurrent vision requests.
+For LM Studio stability, keep LM-request concurrency at 1 (the default). The app prepares/hashes/copies files in parallel while serializing calls to the local model.
 
 More setup notes are in [docs/LM_STUDIO.md](docs/LM_STUDIO.md).
 
@@ -179,3 +179,9 @@ python -m pytest -q
 The repository normalizes text files through `.gitattributes` and `.editorconfig` to keep diffs readable.
 
 Before publishing a release, use [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+
+## License
+
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+
+In short: you may use, modify, and distribute this software freely, but any modified version that is accessible over a network must also share its source code under the same license.

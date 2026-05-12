@@ -54,7 +54,7 @@ def test_sort_worker_strict_mode_forces_uncategorized_for_unknown_tag(tmp_path: 
     f.write_bytes(b"fake")
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", lambda *_a, **_k: "new/custom/tag")
+    monkeypatch.setattr("app.worker.chat_completion_cfg", lambda *_a, **_k: "new/custom/tag")
 
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
@@ -75,7 +75,7 @@ def test_sort_worker_free_mode_allows_model_tag_folder(tmp_path: Path, monkeypat
     f.write_bytes(b"fake")
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", lambda *_a, **_k: "new/custom/tag")
+    monkeypatch.setattr("app.worker.chat_completion_cfg", lambda *_a, **_k: "new/custom/tag")
 
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
@@ -96,7 +96,7 @@ def test_sort_worker_auto_mode_chooses_popular_candidate(tmp_path: Path, monkeyp
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
     monkeypatch.setattr(
-        "app.worker.chat_completion",
+        "app.worker.chat_completion_cfg",
         lambda *_a, **_k: "city/night, nature/forest/sunset, nature/forest/sunset",
     )
 
@@ -119,7 +119,7 @@ def test_sort_worker_general_mode_accepts_extended_preset(tmp_path: Path, monkey
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
     monkeypatch.setattr(
-        "app.worker.chat_completion",
+        "app.worker.chat_completion_cfg",
         lambda *_a, **_k: '{"primary_category": "coding_ide_and_terminal", "confidence": 0.91}',
     )
 
@@ -153,7 +153,7 @@ def test_sort_worker_serializes_lm_requests_when_api_workers_is_one(tmp_path: Pa
         return '{"primary_category": "vehicles_and_racing", "confidence": 0.9}'
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+    monkeypatch.setattr("app.worker.chat_completion_cfg", fake_chat)
 
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
@@ -182,7 +182,7 @@ def test_sort_worker_retries_uncategorized_then_succeeds(tmp_path: Path, monkeyp
         return "vehicles_and_racing"
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+    monkeypatch.setattr("app.worker.chat_completion_cfg", fake_chat)
 
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
@@ -210,7 +210,7 @@ def test_sort_worker_video_structured_uses_contact_sheet_once(tmp_path: Path, mo
 
     monkeypatch.setattr("app.worker.extract_frames_reduced", lambda *_a, **_k: [object(), object()])
     monkeypatch.setattr("app.worker.video_contact_sheet_data_uri", lambda _frames: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+    monkeypatch.setattr("app.worker.chat_completion_cfg", fake_chat)
 
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
@@ -243,7 +243,7 @@ def test_sort_worker_video_structured_falls_back_to_single_frame_on_api_error(
     monkeypatch.setattr("app.worker.extract_frames_reduced", lambda *_a, **_k: [object(), object()])
     monkeypatch.setattr("app.worker.video_contact_sheet_data_uri", lambda _frames: "data:image/jpeg;base64,AA==")
     monkeypatch.setattr("app.worker.pil_image_to_jpeg_data_uri", lambda *_a, **_k: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+    monkeypatch.setattr("app.worker.chat_completion_cfg", fake_chat)
 
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
@@ -272,7 +272,7 @@ def test_sort_worker_retries_api_error_then_succeeds(tmp_path: Path, monkeypatch
         return "vehicles_and_racing"
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+    monkeypatch.setattr("app.worker.chat_completion_cfg", fake_chat)
 
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
@@ -293,7 +293,7 @@ def test_sort_worker_no_space_leaves_file_pending(tmp_path: Path, monkeypatch: o
     f.write_bytes(b"fake")
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", lambda *_a, **_k: "vehicles_and_racing")
+    monkeypatch.setattr("app.worker.chat_completion_cfg", lambda *_a, **_k: "vehicles_and_racing")
     monkeypatch.setattr("app.worker.has_disk_space_for_copy", lambda *_a, **_k: False)
 
     db = Database(tmp_path / "state.sqlite3")
@@ -323,7 +323,7 @@ def test_sort_worker_skips_existing_output_folder_inside_source(tmp_path: Path, 
         return "vehicles_and_racing"
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", fake_chat)
+    monkeypatch.setattr("app.worker.chat_completion_cfg", fake_chat)
 
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
@@ -346,7 +346,7 @@ def test_sort_worker_review_first_writes_manifest_without_copy(tmp_path: Path, m
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
     monkeypatch.setattr(
-        "app.worker.chat_completion",
+        "app.worker.chat_completion_cfg",
         lambda *_a, **_k: '{"primary_category": "vehicles_and_racing", "confidence": 0.9}',
     )
 
@@ -372,7 +372,7 @@ def test_sort_worker_resume_session_skips_done_path(tmp_path: Path, monkeypatch:
     f.write_bytes(b"fake")
 
     monkeypatch.setattr("app.worker.image_to_jpeg_base64_data_uri", lambda _p: "data:image/jpeg;base64,AA==")
-    monkeypatch.setattr("app.worker.chat_completion", lambda *_a, **_k: "vehicles_and_racing")
+    monkeypatch.setattr("app.worker.chat_completion_cfg", lambda *_a, **_k: "vehicles_and_racing")
 
     db = Database(tmp_path / "state.sqlite3")
     key = make_sort_session_key(
@@ -391,7 +391,7 @@ def test_sort_worker_resume_session_skips_done_path(tmp_path: Path, monkeypatch:
     def fail_chat(*_a: object, **_k: object) -> str:
         raise AssertionError("resume should skip already completed path before API")
 
-    monkeypatch.setattr("app.worker.chat_completion", fail_chat)
+    monkeypatch.setattr("app.worker.chat_completion_cfg", fail_chat)
     q2 = Queue()
     w2 = SortWorker(
         db,

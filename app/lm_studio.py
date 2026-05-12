@@ -38,6 +38,8 @@ from app.constants import (
     VISION_PROBE_MAX_TOKENS,
     VISION_TEST_TIMEOUT_SEC,
 )
+from app.tag_config import TagMode, ResolvedTagConfig
+from app.text_utils import strip_thinking_sections
 
 LM_STUDIO_MODELS_PATH = "/api/v1/models"
 LM_STUDIO_UNLOAD_PATH = "/api/v1/models/unload"
@@ -163,50 +165,45 @@ def endpoint_status(
     return response.status_code, response.reason
 
 
-def build_classification_system_prompt(
-    user_context: str,
+_HEADER_AUTO = (
+    "You are a local backend automated tagging script. Create stable short lowercase categories. "
+    "The known tags below are reference examples, not a whitelist. Use them only when they are the best literal match. "
+    "If a clearer category exists, create it. Use broad roots such as "
+    "vehicles, humans, animals, nature, landscape, screenshots, memes, documents, art, "
+    "illustration, food, travel, architecture, city, objects. Avoid near-duplicate words "
+    "and overly specific one-off folders. Output one line with candidate tags separated by commas "
+    "(most probable first). Example: vehicles/bmw, nature/forest, screenshots/chat."
+)
+_HEADER_FREE = (
+    "You are a local backend automated tagging script. "
+    "Your primary job is one concise lowercase hierarchical tag (slash-separated), "
+    "e.g. art/photography/street or tech/desk/monitors. "
+    "Use a preset tag from the list below ONLY when it is the best literal match; "
+    "do NOT pick a preset just because its name appears inside your reasoning. "
+    "When in doubt, output a new specific hierarchical path."
+)
+
+
+def build_system_prompt(
+    cfg: ResolvedTagConfig,
     *,
-    free_mode: bool = False,
-    auto_mode: bool = False,
-    general_mode: bool = False,
-    custom_categories: tuple[str, ...] | None = None,
-    custom_prompts: dict[str, str] | None = None,
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> str:
-    """Системный текст: базовые правила + приоритеты + определения по тегам + USER_CONTEXT."""
-    if custom_categories:
-        tag_keys = custom_categories
-    elif general_mode:
-        tag_keys = GENERAL_CATEGORIES
-    else:
-        tag_keys = CATEGORIES
-    if auto_mode:
-        header = (
-            "You are a local backend automated tagging script. Create stable short lowercase categories. "
-            "The known tags below are reference examples, not a whitelist. Use them only when they are the best literal match. "
-            "If a clearer category exists, create it. Use broad roots such as "
-            "vehicles, humans, animals, nature, landscape, screenshots, memes, documents, art, "
-            "illustration, food, travel, architecture, city, objects. Avoid near-duplicate words "
-            "and overly specific one-off folders. Output one line with candidate tags separated by commas "
-            "(most probable first). Example: vehicles/bmw, nature/forest, screenshots/chat."
-        )
-    elif free_mode:
-        header = (
-            "You are a local backend automated tagging script. "
-            "Your primary job is one concise lowercase hierarchical tag (slash-separated), "
-            "e.g. art/photography/street or tech/desk/monitors. "
-            "Use a preset tag from the list below ONLY when it is the best literal match; "
-            "do NOT pick a preset just because its name appears inside your reasoning. "
-            "When in doubt, output a new specific hierarchical path."
-        )
-    elif custom_categories:
+    """Build the classification system prompt from a resolved tag config."""
+    tag_keys = cfg.categories
+
+    if cfg.mode == TagMode.AUTO:
+        header = _HEADER_AUTO
+    elif cfg.mode == TagMode.FREE:
+        header = _HEADER_FREE
+    elif cfg.mode == TagMode.CUSTOM:
         header = (
             "You are a local backend automated tagging script. You have no conversational ability. "
             "Your ONLY job is to output a single exact string from this custom user-defined list: "
             f"{', '.join(tag_keys)}."
         )
-    elif general_mode:
+    elif cfg.mode == TagMode.GENERAL:
         header = (
             "You are a local backend automated tagging script. You have no conversational ability. "
             "Your ONLY job is to output a single exact string from the extended General preset list: "
@@ -218,6 +215,7 @@ def build_classification_system_prompt(
             "and no conversational ability. Your ONLY job is to output a single exact string from this "
             f"list: {', '.join(tag_keys)}."
         )
+
     output_rule = (
         "Output a single compact JSON object with keys: primary_category, candidates, confidence, "
         "reason_short, needs_review. primary_category and candidates must use lowercase tag strings only. "
@@ -229,39 +227,78 @@ def build_classification_system_prompt(
             f"no punctuation. If unsure, output {UNCATEGORIZED}."
         )
     )
+
     parts: list[str] = [
         header,
         output_rule,
         "Do not write long reasoning. If you must think, put only the final answer after it.",
         "",
     ]
-    if not custom_categories:
-        parts.append(PRIORITY_RULES_BLOCK)
+
+    if cfg.priority_rules_text:
+        parts.append(cfg.priority_rules_text)
         parts.append("")
-    if auto_mode or free_mode:
+
+    if cfg.is_free:
         parts.append("Reference definitions (optional, not a whitelist):")
-    elif custom_categories:
+    elif cfg.mode == TagMode.CUSTOM:
         parts.append("User-defined categories (use exactly these tags):")
     else:
         parts.append("Definitions (tag: meaning):")
-    _cprompts = custom_prompts or {}
-    reference_keys = GENERAL_CATEGORIES if (auto_mode or free_mode) else tag_keys
-    for cat in reference_keys:
-        desc = _cprompts.get(cat) or CATEGORY_PROMPTS.get(cat, cat.replace("_", " "))
+
+    for cat in tag_keys:
+        desc = cfg.prompts.get(cat, cat.replace("_", " "))
         parts.append(f"{cat}: {desc}")
     parts.append("")
-    if user_context.strip():
+
+    if cfg.user_context.strip():
         parts.append(
             "User context for recognition (match these descriptions to identify personal subjects):\n"
-            f"{user_context}"
+            f"{cfg.user_context}"
         )
     else:
         parts.append("User context: not provided. Skip personal_user_* and my_dog tags.")
+
     if prompt_extra.strip():
         parts.append("")
         parts.append("Extra prompt settings:")
         parts.append(prompt_extra.strip())
+
     return "\n".join(parts)
+
+
+def build_classification_system_prompt(
+    user_context: str,
+    *,
+    free_mode: bool = False,
+    auto_mode: bool = False,
+    general_mode: bool = False,
+    custom_categories: tuple[str, ...] | None = None,
+    custom_prompts: dict[str, str] | None = None,
+    prompt_extra: str = "",
+    structured_output: bool = False,
+) -> str:
+    """Legacy wrapper — delegates to build_system_prompt(ResolvedTagConfig)."""
+    from app.tag_config import resolve_tag_config
+    if custom_categories:
+        mode = TagMode.CUSTOM
+    elif auto_mode:
+        mode = TagMode.AUTO
+    elif free_mode:
+        mode = TagMode.FREE
+    elif general_mode:
+        mode = TagMode.GENERAL
+    else:
+        mode = TagMode.STRICT
+    cfg = resolve_tag_config(mode, user_context_override=user_context)
+    if custom_categories:
+        cfg = ResolvedTagConfig(
+            mode=TagMode.CUSTOM,
+            categories=custom_categories,
+            prompts=custom_prompts or {},
+            user_context=user_context,
+        )
+    return build_system_prompt(cfg, prompt_extra=prompt_extra, structured_output=structured_output)
 
 
 def _retryable_request_error(exc: BaseException) -> bool:
@@ -364,27 +401,7 @@ def _normalize_content_field(content: Any) -> str:
     return str(content)
 
 
-def _strip_thinking_sections(text: str) -> str:
-    """
-    Remove known reasoning wrappers before downstream parsing.
-    Supported forms:
-    - <think> ... </think>
-    - <|channel>thought ... <channel|>
-    """
-    if not text:
-        return ""
-    cleaned = text
-    final_match = re.search(r"(?is)<\|channel\|>\s*final\b(.*)$", cleaned)
-    if final_match:
-        cleaned = final_match.group(1)
-    cleaned = re.sub(r"(?is)<think>.*?</think>", " ", cleaned)
-    cleaned = re.sub(r"(?is)<think>.*$", " ", cleaned)
-    cleaned = re.sub(r"(?is)<\|channel\>\s*thought\b.*?<channel\|>", " ", cleaned)
-    cleaned = re.sub(r"(?is)<\|channel\|>\s*(?:analysis|thought)\b.*?<\|channel\|>\s*final\b", " ", cleaned)
-    cleaned = re.sub(r"(?im)^\s*<think>\s*$", " ", cleaned)
-    cleaned = re.sub(r"(?im)^\s*</think>\s*$", " ", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned.strip()
+_strip_thinking_sections = strip_thinking_sections
 
 
 def _extract_assistant_text(msg: dict[str, Any]) -> str:
@@ -403,6 +420,277 @@ def _extract_assistant_text(msg: dict[str, Any]) -> str:
     return ""
 
 
+def _user_text_single(structured: bool) -> str:
+    if structured:
+        return (
+            "Classify this image. Return one compact JSON object only. "
+            "Use primary_category plus candidates sorted best first."
+        )
+    return (
+        "Classify this image. Output exactly one final tag only, no explanation. "
+        "In free mode this may be a hierarchical slash-separated tag. "
+        "In auto mode output comma-separated candidates with the best first."
+    )
+
+
+def _user_text_multi(structured: bool) -> str:
+    if structured:
+        return (
+            "These images are frames from the same video file in chronological order. "
+            "Classify the entire content. Return one compact JSON object only."
+        )
+    return (
+        "These images are frames from the same video file in chronological order. "
+        "Classify the entire content with exactly one final tag only, no explanation. "
+        "In free mode this may be a hierarchical slash-separated tag. "
+        "In auto mode output comma-separated candidates with the best first."
+    )
+
+
+# --- Config-based API (new, clean) ---
+
+
+def build_messages_cfg(
+    image_data_uri: str,
+    cfg: ResolvedTagConfig,
+    *,
+    prompt_extra: str = "",
+    structured_output: bool = False,
+) -> list[dict[str, Any]]:
+    """Build single-image messages from a ResolvedTagConfig."""
+    system_text = build_system_prompt(cfg, prompt_extra=prompt_extra, structured_output=structured_output)
+    return [
+        {"role": "system", "content": system_text},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _user_text_single(structured_output)},
+                {"type": "image_url", "image_url": {"url": image_data_uri}},
+            ],
+        },
+    ]
+
+
+def build_messages_multi_cfg(
+    image_data_uris: list[str],
+    cfg: ResolvedTagConfig,
+    *,
+    prompt_extra: str = "",
+    structured_output: bool = False,
+) -> list[dict[str, Any]]:
+    """Build multi-frame messages from a ResolvedTagConfig."""
+    system_text = build_system_prompt(cfg, prompt_extra=prompt_extra, structured_output=structured_output)
+    user_parts: list[dict[str, Any]] = [
+        {"type": "text", "text": _user_text_multi(structured_output)},
+    ]
+    for uri in image_data_uris:
+        user_parts.append({"type": "image_url", "image_url": {"url": uri}})
+    return [
+        {"role": "system", "content": system_text},
+        {"role": "user", "content": user_parts},
+    ]
+
+
+def _completion_once_cfg(
+    messages: list[dict[str, Any]],
+    *,
+    api_base: str,
+    model: str,
+    api_key: str | None,
+    timeout: tuple[float, float] | float,
+    temperature: float,
+    max_tokens: int,
+) -> str:
+    """Low-level single request (no retries)."""
+    base = normalize_api_base(api_base)
+    url = f"{base}{CHAT_COMPLETIONS_PATH}"
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    r = requests.post(
+        url,
+        headers=_auth_headers_json(api_key),
+        data=json.dumps(payload),
+        timeout=timeout,
+    )
+    _raise_for_status_with_hint(r, CHAT_COMPLETIONS_PATH)
+    try:
+        data = r.json()
+    except json.JSONDecodeError as e:
+        raise ValueError(f"invalid JSON response: {e}") from e
+    choices = data.get("choices") or []
+    if not choices:
+        raise ValueError("empty choices")
+    msg = choices[0].get("message") or {}
+    text = _extract_assistant_text(msg)
+    if not text:
+        raise ValueError("empty assistant message (no content and no reasoning_content)")
+    return text
+
+
+def chat_completion_cfg(
+    image_data_uri: str,
+    cfg: ResolvedTagConfig,
+    *,
+    api_base: str = DEFAULT_API_BASE,
+    model: str = DEFAULT_MODEL,
+    api_key: str | None = None,
+    timeout: tuple[float, float] | None = None,
+    on_retry: Callable[[str], None] | None = None,
+    prompt_extra: str = "",
+    structured_output: bool = False,
+    temperature: float = 0.2,
+    max_tokens: int = CHAT_COMPLETION_MAX_TOKENS,
+) -> str:
+    """Config-based single-image classification with retries."""
+    t = timeout if timeout is not None else (REQUEST_CONNECT_TIMEOUT_SEC, REQUEST_READ_TIMEOUT_SEC)
+    msgs = build_messages_cfg(image_data_uri, cfg, prompt_extra=prompt_extra, structured_output=structured_output)
+    return _run_completion_retries(
+        lambda: _completion_once_cfg(
+            msgs,
+            api_base=api_base,
+            model=model,
+            api_key=api_key,
+            timeout=t,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ),
+        on_retry=on_retry,
+        attempt_label="Повтор",
+    )
+
+
+def chat_completion_multi_cfg(
+    image_data_uris: list[str],
+    cfg: ResolvedTagConfig,
+    *,
+    api_base: str = DEFAULT_API_BASE,
+    model: str = DEFAULT_MODEL,
+    api_key: str | None = None,
+    timeout: tuple[float, float] | None = None,
+    on_retry: Callable[[str], None] | None = None,
+    prompt_extra: str = "",
+    structured_output: bool = False,
+    temperature: float = 0.2,
+    max_tokens: int = CHAT_COMPLETION_MAX_TOKENS,
+) -> str:
+    """Config-based multi-image classification with retries."""
+    if not image_data_uris:
+        raise ValueError("no images")
+    t = timeout if timeout is not None else (REQUEST_CONNECT_TIMEOUT_SEC, REQUEST_READ_TIMEOUT_SEC)
+    msgs = build_messages_multi_cfg(image_data_uris, cfg, prompt_extra=prompt_extra, structured_output=structured_output)
+    return _run_completion_retries(
+        lambda: _completion_once_cfg(
+            msgs,
+            api_base=api_base,
+            model=model,
+            api_key=api_key,
+            timeout=t,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ),
+        on_retry=on_retry,
+        attempt_label="Повтор multi",
+    )
+
+
+def classify_frames_cfg(
+    image_data_uris: list[str],
+    cfg: ResolvedTagConfig,
+    *,
+    api_base: str = DEFAULT_API_BASE,
+    model: str = DEFAULT_MODEL,
+    api_key: str | None = None,
+    timeout: tuple[float, float] | None = None,
+    on_retry: Callable[[str], None] | None = None,
+    on_log: Callable[[str], None] | None = None,
+    prompt_extra: str = "",
+) -> str:
+    """Config-based frame classification with multi→single fallback cascade."""
+    from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_auto, normalize_tag_free
+
+    def _normalize(raw: str) -> str:
+        if cfg.mode == TagMode.AUTO:
+            return normalize_tag_auto(raw)
+        if cfg.mode == TagMode.FREE:
+            return normalize_tag_free(raw)
+        wl = cfg.whitelist or GENERAL_CATEGORY_WHITELIST
+        return normalize_tag(raw, whitelist=wl)
+
+    def log(msg: str) -> None:
+        if on_log:
+            on_log(msg)
+
+    uris = [u for u in image_data_uris if u][:VIDEO_FRAME_COUNT]
+    if not uris:
+        return UNCATEGORIZED
+    t = timeout if timeout is not None else (REQUEST_CONNECT_TIMEOUT_SEC, REQUEST_READ_TIMEOUT_SEC)
+
+    if len(uris) == 1:
+        try:
+            raw = chat_completion_cfg(uris[0], cfg, api_base=api_base, model=model, api_key=api_key,
+                                      timeout=t, on_retry=on_retry, prompt_extra=prompt_extra)
+            return _normalize(raw)
+        except Exception as e:
+            log(f"rollback: single frame: {e!s}")
+            return UNCATEGORIZED
+
+    multi_candidates: list[list[str]] = []
+    if len(uris) >= 3:
+        multi_candidates.append(uris[:3])
+    if len(uris) >= 2:
+        multi_candidates.append(uris[:2])
+    multi_candidates.append(uris[:1])
+
+    seen: set[tuple[str, ...]] = set()
+    for subset in multi_candidates:
+        key = tuple(subset)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(subset) >= 2:
+            try:
+                raw = chat_completion_multi_cfg(subset, cfg, api_base=api_base, model=model,
+                                               api_key=api_key, timeout=t, on_retry=on_retry,
+                                               prompt_extra=prompt_extra)
+                return _normalize(raw)
+            except Exception as e:
+                log(f"rollback: multi n={len(subset)}: {e!s}")
+        else:
+            try:
+                raw = chat_completion_cfg(subset[0], cfg, api_base=api_base, model=model,
+                                         api_key=api_key, timeout=t, on_retry=on_retry,
+                                         prompt_extra=prompt_extra)
+                return _normalize(raw)
+            except Exception as e:
+                log(f"rollback: single after multi fail: {e!s}")
+
+    tags: list[str] = []
+    for i, u in enumerate(uris):
+        try:
+            raw = chat_completion_cfg(u, cfg, api_base=api_base, model=model, api_key=api_key,
+                                      timeout=t, on_retry=on_retry, prompt_extra=prompt_extra)
+            tags.append(_normalize(raw))
+        except Exception as e:
+            log(f"rollback: per-frame {i}: {e!s}")
+
+    if not tags:
+        return UNCATEGORIZED
+    if cfg.is_free:
+        counts: dict[str, int] = {}
+        for tag in tags:
+            counts[tag] = counts.get(tag, 0) + 1
+        return sorted(counts, key=lambda k: (-counts[k], len(k), k))[0]
+    wl = cfg.whitelist or GENERAL_CATEGORY_WHITELIST
+    return merge_tags_by_priority(tags, whitelist=wl)
+
+
+# --- Legacy API (preserved for backward compat / tests) ---
+
+
 def build_messages(
     image_data_uri: str,
     user_context: str,
@@ -415,7 +703,7 @@ def build_messages(
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
-    """System + user with vision image_url (OpenAI-compatible)."""
+    """Legacy: System + user with vision image_url (OpenAI-compatible)."""
     system_text = build_classification_system_prompt(
         user_context,
         free_mode=free_mode,
@@ -431,19 +719,7 @@ def build_messages(
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        "Classify this image. Output exactly one final tag only, no explanation. "
-                        "In free mode this may be a hierarchical slash-separated tag. "
-                        "In auto mode output comma-separated candidates with the best first."
-                        if not structured_output
-                        else (
-                            "Classify this image. Return one compact JSON object only. "
-                            "Use primary_category plus candidates sorted best first."
-                        )
-                    ),
-                },
+                {"type": "text", "text": _user_text_single(structured_output)},
                 {"type": "image_url", "image_url": {"url": image_data_uri}},
             ],
         },
@@ -462,7 +738,7 @@ def build_messages_multi(
     prompt_extra: str = "",
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
-    """Several frames from one video/GIF — один тег на весь контент."""
+    """Legacy: Several frames from one video/GIF — один тег на весь контент."""
     system_text = build_classification_system_prompt(
         user_context,
         free_mode=free_mode,
@@ -474,20 +750,7 @@ def build_messages_multi(
         structured_output=structured_output,
     )
     user_parts: list[dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": (
-                "These images are frames from the same video file in chronological order. "
-                "Classify the entire content with exactly one final tag only, no explanation. "
-                "In free mode this may be a hierarchical slash-separated tag. "
-                "In auto mode output comma-separated candidates with the best first."
-                if not structured_output
-                else (
-                    "These images are frames from the same video file in chronological order. "
-                    "Classify the entire content. Return one compact JSON object only."
-                )
-            ),
-        },
+        {"type": "text", "text": _user_text_multi(structured_output)},
     ]
     for uri in image_data_uris:
         user_parts.append({"type": "image_url", "image_url": {"url": uri}})

@@ -37,8 +37,17 @@ from app.images import (
     pil_image_to_jpeg_data_uri,
     video_contact_sheet_data_uri,
 )
-from app.lm_studio import CHAT_COMPLETION_MAX_TOKENS, EndpointPool, chat_completion, classify_frames
+from app.lm_studio import (
+    CHAT_COMPLETION_MAX_TOKENS,
+    EndpointPool,
+    chat_completion,
+    chat_completion_cfg,
+    chat_completion_multi_cfg,
+    classify_frames,
+    classify_frames_cfg,
+)
 from app.review_manifest import SortReviewManifest
+from app.tag_config import TagMode, ResolvedTagConfig
 from app.task_state import TaskState
 from app.video_frames import extract_frames_reduced, is_animated_gif
 
@@ -120,6 +129,7 @@ class SortWorker:
         api_key: str | None = None,
         workers: int = 3,
         api_workers: int = 4,
+        tag_config: ResolvedTagConfig | None = None,
         free_tag_mode: bool = False,
         auto_tag_mode: bool = False,
         general_tag_mode: bool = False,
@@ -142,11 +152,31 @@ class SortWorker:
         self.api_key = api_key if api_key is not None else DEFAULT_API_KEY
         self.workers = max(1, min(16, int(workers)))
         self.api_workers = max(1, min(16, int(api_workers)))
-        self.free_tag_mode = bool(free_tag_mode)
-        self.auto_tag_mode = bool(auto_tag_mode)
-        self.general_tag_mode = bool(general_tag_mode)
-        self.custom_categories = tuple(custom_categories) if custom_categories else None
-        self.custom_prompts: dict[str, str] | None = None
+
+        if tag_config is not None:
+            self.tag_config = tag_config
+        else:
+            if custom_categories:
+                mode = TagMode.CUSTOM
+            elif auto_tag_mode:
+                mode = TagMode.AUTO
+            elif free_tag_mode:
+                mode = TagMode.FREE
+            elif general_tag_mode:
+                mode = TagMode.GENERAL
+            else:
+                mode = TagMode.STRICT
+            from app.tag_config import resolve_tag_config
+            self.tag_config = resolve_tag_config(mode)
+
+        self.free_tag_mode = self.tag_config.mode in (TagMode.FREE,)
+        self.auto_tag_mode = self.tag_config.mode in (TagMode.AUTO,)
+        self.general_tag_mode = self.tag_config.mode in (TagMode.GENERAL,)
+        self.custom_categories = (
+            self.tag_config.categories if self.tag_config.mode == TagMode.CUSTOM else None
+        )
+        self.custom_prompts = self.tag_config.prompts if self.tag_config.mode == TagMode.CUSTOM else None
+
         self.prompt_extra = str(prompt_extra or "")
         self.structured_output = bool(structured_output)
         self.review_first = bool(review_first)
@@ -244,11 +274,7 @@ class SortWorker:
                     )
             total = len(files)
             self._emit({"type": "scan_done", "total": total})
-            tag_mode = (
-                "auto"
-                if self.auto_tag_mode
-                else ("free" if self.free_tag_mode else ("general" if self.general_tag_mode else "strict"))
-            )
+            tag_mode = self.tag_config.mode.value
             session_key = self.session_key or make_sort_session_key(
                 str(source_dir),
                 str(dest_dir),
@@ -265,9 +291,7 @@ class SortWorker:
                     "api_workers": self.api_workers,
                     "structured_output": self.structured_output,
                     "prompt_extra": self.prompt_extra,
-                    "auto_tag_mode": self.auto_tag_mode,
-                    "free_tag_mode": self.free_tag_mode,
-                    "general_tag_mode": self.general_tag_mode,
+                    "tag_mode": self.tag_config.mode.value,
                 }
 
             def save_session(status: str, done_files: int, *, force: bool = False) -> None:
@@ -438,13 +462,7 @@ class SortWorker:
                         save_session("running", done)
 
             def _mode_name() -> str:
-                if self.auto_tag_mode:
-                    return "auto"
-                if self.free_tag_mode:
-                    return "free"
-                if self.general_tag_mode:
-                    return "general"
-                return "strict"
+                return self.tag_config.mode.value
 
             def _prompt_for_request() -> str:
                 alias_block = aliases_to_prompt_lines(self.category_aliases)
@@ -514,7 +532,7 @@ class SortWorker:
                         if cand != UNCATEGORIZED and cand not in candidates:
                             candidates.append(cand)
 
-                if self.auto_tag_mode or self.free_tag_mode:
+                if self.tag_config.is_free:
                     counts: dict[str, int] = {}
                     best_conf: dict[str, float] = {}
                     for r in valid:
@@ -561,19 +579,14 @@ class SortWorker:
                 try:
                     sheet_uri = video_contact_sheet_data_uri(frames)
                     raw = _timed_api_call(
-                        lambda: chat_completion(
+                        lambda: chat_completion_cfg(
                             sheet_uri,
-                            user_context,
+                            self.tag_config,
                             api_base=_get_api_base(),
                             model=self.model,
                             api_key=self.api_key,
                             timeout=_timeout(),
                             on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                            free_mode=self.free_tag_mode,
-                            auto_mode=self.auto_tag_mode,
-                            general_mode=self.general_tag_mode,
-                            custom_categories=self.custom_categories,
-                            custom_prompts=self.custom_prompts,
                             prompt_extra=prompt_extra,
                             structured_output=True,
                             temperature=self.temperature,
@@ -596,19 +609,14 @@ class SortWorker:
                     mid = frames[len(frames) // 2]
                     single_uri = pil_image_to_jpeg_data_uri(mid, max_side=768, quality=76)
                     raw = _timed_api_call(
-                        lambda: chat_completion(
+                        lambda: chat_completion_cfg(
                             single_uri,
-                            user_context,
+                            self.tag_config,
                             api_base=_get_api_base(),
                             model=self.model,
                             api_key=self.api_key,
                             timeout=_timeout(),
                             on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                            free_mode=self.free_tag_mode,
-                            auto_mode=self.auto_tag_mode,
-                            general_mode=self.general_tag_mode,
-                            custom_categories=self.custom_categories,
-                            custom_prompts=self.custom_prompts,
                             prompt_extra=f"{base_prompt}\n\nVIDEO MODE: This is one representative frame from a video.".strip(),
                             structured_output=True,
                             temperature=self.temperature,
@@ -736,20 +744,15 @@ class SortWorker:
                                 else:
                                     uris = [pil_image_to_jpeg_data_uri(im) for im in frames]
                                     category = _timed_api_call(
-                                        lambda: classify_frames(
+                                        lambda: classify_frames_cfg(
                                             uris,
-                                            user_context,
+                                            self.tag_config,
                                             api_base=_get_api_base(),
                                             model=self.model,
                                             api_key=self.api_key,
                                             timeout=_timeout(),
                                             on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
                                             on_log=lambda m: self._emit({"type": "log", "text": m}),
-                                            free_mode=self.free_tag_mode or self.auto_tag_mode,
-                                            auto_mode=self.auto_tag_mode,
-                                            general_mode=self.general_tag_mode,
-                                            custom_categories=self.custom_categories,
-                                            custom_prompts=self.custom_prompts,
                                             prompt_extra=_prompt_for_request(),
                                         )
                                     )
@@ -757,19 +760,14 @@ class SortWorker:
                         else:
                             data_uri = image_to_jpeg_base64_data_uri(path)
                             raw = _timed_api_call(
-                                lambda: chat_completion(
+                                lambda: chat_completion_cfg(
                                     data_uri,
-                                    user_context,
+                                    self.tag_config,
                                     api_base=_get_api_base(),
                                     model=self.model,
                                     api_key=self.api_key,
                                     timeout=_timeout(),
                                     on_retry=lambda msg: self._emit({"type": "log", "text": msg}),
-                                    free_mode=self.free_tag_mode or self.auto_tag_mode,
-                                    auto_mode=self.auto_tag_mode,
-                                    general_mode=self.general_tag_mode,
-                                    custom_categories=self.custom_categories,
-                                    custom_prompts=self.custom_prompts,
                                     prompt_extra=_prompt_for_request(),
                                     structured_output=self.structured_output,
                                     temperature=self.temperature,
@@ -778,17 +776,15 @@ class SortWorker:
                             )
                             result = _result_from_raw(raw)
                             category = result.category
-                            if not self.structured_output and self.auto_tag_mode:
+                            if not self.structured_output and self.tag_config.mode == TagMode.AUTO:
                                 category = normalize_tag_auto(raw, extra_aliases=self.category_aliases)
                                 result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
-                            elif not self.structured_output and self.free_tag_mode:
+                            elif not self.structured_output and self.tag_config.mode == TagMode.FREE:
                                 category = normalize_tag_free(raw)
                                 result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
-                            elif not self.structured_output and self.general_tag_mode:
-                                category = normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
-                                result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
-                            elif not self.structured_output:
-                                category = normalize_tag(raw)
+                            elif not self.structured_output and self.tag_config.is_strict_whitelist:
+                                wl = self.tag_config.whitelist or GENERAL_CATEGORY_WHITELIST
+                                category = normalize_tag(raw, whitelist=wl)
                                 result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
                     except Exception as e:
                         metrics["api_errors"] += 1
@@ -803,8 +799,8 @@ class SortWorker:
                             }
                         )
                         category = UNCATEGORIZED
-                    strict_whitelist = GENERAL_CATEGORY_WHITELIST if self.general_tag_mode else CANONICAL_CATEGORY_WHITELIST
-                    if not (self.free_tag_mode or self.auto_tag_mode) and category not in strict_whitelist:
+                    strict_whitelist = self.tag_config.whitelist
+                    if strict_whitelist is not None and category not in strict_whitelist:
                         category = UNCATEGORIZED
                         result = ClassificationResult(UNCATEGORIZED, result.candidates, result.confidence, result.reason_short, True, result.raw_text)
                     if category != UNCATEGORIZED:

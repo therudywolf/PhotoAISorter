@@ -14,11 +14,11 @@ from app.cache_service import CacheService
 from app.category_aliases import load_category_aliases
 from app.context_tags import (
     build_custom_categories,
-    build_custom_prompts,
     build_user_context_from_tags,
     get_active_set,
     load_tag_store,
 )
+from app.tag_config import TagMode, ResolvedTagConfig, resolve_tag_config
 from app.constants import (
     CANONICAL_CATEGORIES,
     DEFAULT_API_BASE,
@@ -246,7 +246,7 @@ class App(ctk.CTk):
         row_tag_mode.pack(fill="x", padx=8, pady=(0, 4))
         ctk.CTkSegmentedButton(
             row_tag_mode,
-            values=[_TAG_MODE_LABELS[k] for k in ("general", "strict", "auto", "free")],
+            values=[_TAG_MODE_LABELS[k] for k in ("general", "strict", "auto", "free", "custom")],
             variable=self._tag_mode_label_var,
             command=self._on_tag_mode_label_change,
         ).pack(fill="x", expand=True)
@@ -987,8 +987,6 @@ class App(ctk.CTk):
             )
 
         _tag_store = load_tag_store()
-        _active_tag_set = get_active_set(_tag_store)
-        user_context = build_user_context_from_tags(_active_tag_set)
         api_base = self._api_var.get().strip() or DEFAULT_API_BASE
         model = self._model_resolved()
 
@@ -996,8 +994,20 @@ class App(ctk.CTk):
             media_mode = MediaScanMode(self._media_mode_var.get())
         except ValueError:
             media_mode = MediaScanMode.PHOTOS_ONLY
-        tag_mode = self._tag_mode_var.get()
-        session_key = self._sort_session_key_for_current(in_path, out_path, media_mode, tag_mode)
+        tag_mode_str = self._tag_mode_var.get()
+        try:
+            tag_mode = TagMode(tag_mode_str)
+        except ValueError:
+            tag_mode = TagMode.STRICT
+
+        tag_cfg = resolve_tag_config(tag_mode, tag_store=_tag_store)
+
+        if tag_mode == TagMode.CUSTOM and not tag_cfg.categories:
+            self._append_log("Ошибка: нет активного набора тегов или он пуст. Откройте «Теги...» и настройте.")
+            return
+
+        user_context = tag_cfg.user_context
+        session_key = self._sort_session_key_for_current(in_path, out_path, media_mode, tag_mode_str)
         resume_session = bool(force_resume)
         if not force_resume:
             cancelled, resume_session = self._ask_sort_resume_mode(session_key)
@@ -1024,13 +1034,13 @@ class App(ctk.CTk):
             self._append_log("Сессия: продолжение сохранённого прогресса.")
         else:
             self._append_log("Сессия: новая или без найденного незавершённого прогресса.")
-        if tag_mode == "strict":
+        if tag_mode == TagMode.STRICT:
             self._append_log(t("sort.log_mode_strict"))
-        elif tag_mode == "general":
+        elif tag_mode == TagMode.GENERAL:
             self._append_log(t("sort.log_mode_general"))
-        elif tag_mode == "auto":
+        elif tag_mode == TagMode.AUTO:
             self._append_log(t("sort.log_mode_auto"))
-        elif tag_mode == "custom":
+        elif tag_mode == TagMode.CUSTOM:
             self._append_log("Режим папок: пользовательский список категорий.")
         else:
             self._append_log(t("sort.log_mode_free"))
@@ -1042,15 +1052,6 @@ class App(ctk.CTk):
         profile = self._active_profile()
         aliases = load_category_aliases()
 
-        custom_cats: tuple[str, ...] | None = None
-        if tag_mode == "custom":
-            if _active_tag_set and _active_tag_set.tags:
-                custom_cats = build_custom_categories(_active_tag_set)
-            if not custom_cats:
-                self._append_log("Ошибка: нет активного набора тегов или он пуст. Откройте «Теги...» и настройте.")
-                self._set_controls_running(False)
-                return
-
         self._worker = SortWorker(
             self._db,
             self._msg_queue,
@@ -1059,10 +1060,7 @@ class App(ctk.CTk):
             api_key=self._api_key_resolved(),
             workers=workers,
             api_workers=api_workers,
-            free_tag_mode=tag_mode == "free",
-            auto_tag_mode=tag_mode == "auto",
-            general_tag_mode=tag_mode == "general",
-            custom_categories=custom_cats,
+            tag_config=tag_cfg,
             structured_output=True,
             review_first=bool(self._review_first_var.get()),
             category_aliases=aliases,
@@ -1074,8 +1072,6 @@ class App(ctk.CTk):
         )
         prompt_extra = self._prompt_extra_var.get().strip()
         self._worker.prompt_extra = prompt_extra
-        if custom_cats and _active_tag_set:
-            self._worker.custom_prompts = build_custom_prompts(_active_tag_set)
         self._worker.reset_stop()
         self._worker.set_paused(False)
 

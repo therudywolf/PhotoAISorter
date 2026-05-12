@@ -1,30 +1,58 @@
+# Virtual environments
 .venv/
 .venv-linux/
+
+# Python bytecode
 __pycache__/
 *.py[cod]
 *$py.class
 .Python
+
+# App data
 *.sqlite3
+context_tags.json
+
+# Testing / linting
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 .coverage
 htmlcov/
+
+# Build artifacts
 build/
 dist/
 *.egg-info/
+
+# Logs / temp
 *.log
 *.tmp
+
+# Secrets / env
 .env
 .env.*
 !.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
 
 # Local app/runtime output
 _review_runs/
 duplicate_runs/
 
-# Локальная сборка ffmpeg (gyan essentials), не коммитить бинарники
+# FFmpeg local builds (don't commit binaries)
 ffmpeg-runtime/
 ffmpeg-essentials/
 _ffmpeg*.zip
 _ffmpeg_sdk_headers_only_backup/
+
+# Internal planning docs (not for distribution)
+docs/FIX_AND_IMPROVEMENT_PLAN.md
