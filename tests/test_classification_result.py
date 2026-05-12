@@ -41,3 +41,27 @@ def test_parse_empty_falls_back_uncategorized() -> None:
     result = parse_classification_result("", mode="strict")
     assert result.category == UNCATEGORIZED
     assert result.needs_review is True
+
+
+def test_parse_custom_mode_with_whitelist() -> None:
+    custom_wl = frozenset({"portraits", "events", "uncategorized"})
+    raw = '{"primary_category": "portraits", "confidence": 0.85}'
+    result = parse_classification_result(raw, mode="custom", whitelist=custom_wl)
+    assert result.category == "portraits"
+    assert result.needs_review is False
+
+
+def test_parse_custom_mode_rejects_unknown_tag() -> None:
+    custom_wl = frozenset({"portraits", "events", "uncategorized"})
+    raw = "vehicles_and_racing"
+    result = parse_classification_result(raw, mode="custom", whitelist=custom_wl)
+    assert result.category == UNCATEGORIZED
+
+
+def test_parse_preset_mode_accepts_profile_tag() -> None:
+    from app.constants import SearchProfile, categories_for_profile
+    nsfw_wl = frozenset(categories_for_profile(SearchProfile.NSFW))
+    raw = '{"primary_category": "humans_nsfw_female", "confidence": 0.9}'
+    result = parse_classification_result(raw, mode="preset", whitelist=nsfw_wl)
+    assert result.category == "humans_nsfw_female"
+    assert result.needs_review is False

@@ -11,7 +11,7 @@ from app.categorizer import normalize_tag, normalize_tag_auto, normalize_tag_fre
 from app.constants import CANONICAL_CATEGORY_WHITELIST, GENERAL_CATEGORY_WHITELIST
 from app.constants import UNCATEGORIZED
 
-TagMode = Literal["strict", "general", "auto", "free", "preset"]
+TagMode = Literal["strict", "general", "auto", "free", "preset", "custom"]
 
 _JSON_FENCE_RE = re.compile(r"(?is)```(?:json)?\s*(\{.*?\})\s*```")
 
@@ -58,15 +58,23 @@ def _extract_json_obj(raw: str) -> dict[str, Any] | None:
     return None
 
 
-def _normalize(raw: str | None, mode: TagMode, aliases: dict[str, str] | None = None) -> str:
+def _normalize(
+    raw: str | None,
+    mode: TagMode,
+    aliases: dict[str, str] | None = None,
+    *,
+    whitelist: frozenset[str] | None = None,
+) -> str:
     if mode == "auto":
         return normalize_tag_auto(raw, extra_aliases=aliases)
     if mode == "free":
         return normalize_tag_free(raw)
-    if mode == "general":
-        return normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
+    if whitelist is not None:
+        return normalize_tag(raw, whitelist=whitelist)
     if mode == "strict":
         return normalize_tag(raw, whitelist=CANONICAL_CATEGORY_WHITELIST)
+    if mode == "general":
+        return normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
     return normalize_tag(raw, whitelist=GENERAL_CATEGORY_WHITELIST)
 
 
@@ -90,13 +98,14 @@ def parse_classification_result(
     *,
     mode: TagMode,
     aliases: dict[str, str] | None = None,
+    whitelist: frozenset[str] | None = None,
     review_confidence_threshold: float = 0.55,
 ) -> ClassificationResult:
     text = str(raw or "")
     obj = _extract_json_obj(text)
 
     if obj is None:
-        category = _normalize(text, mode, aliases)
+        category = _normalize(text, mode, aliases, whitelist=whitelist)
         confidence = 0.75 if category != UNCATEGORIZED else 0.0
         return ClassificationResult(
             category=category,
@@ -115,10 +124,10 @@ def parse_classification_result(
         or ""
     )
     raw_candidates = _candidate_values(obj)
-    category = _normalize(str(raw_primary), mode, aliases)
+    category = _normalize(str(raw_primary), mode, aliases, whitelist=whitelist)
     candidates: list[str] = []
     for candidate_raw in [str(raw_primary), *raw_candidates]:
-        norm = _normalize(candidate_raw, mode, aliases)
+        norm = _normalize(candidate_raw, mode, aliases, whitelist=whitelist)
         if norm != UNCATEGORIZED and norm not in candidates:
             candidates.append(norm)
     if category == UNCATEGORIZED and candidates:

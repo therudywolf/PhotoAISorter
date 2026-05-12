@@ -12,6 +12,7 @@ __pycache__/
 *.sqlite3
 context_tags.json
 local_presets.json
+category_aliases.json
 
 # Testing / linting
 .pytest_cache/

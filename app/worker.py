@@ -16,7 +16,6 @@ from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag
 from app.category_aliases import aliases_to_prompt_lines
 from app.classification_result import ClassificationResult, parse_classification_result
 from app.constants import (
-    CANONICAL_CATEGORY_WHITELIST,
     CLASSIFY_FILE_MAX_ATTEMPTS,
     COPY_FREE_MARGIN_BYTES,
     DEFAULT_API_KEY,
@@ -43,7 +42,6 @@ from app.lm_studio import (
     chat_completion,
     chat_completion_cfg,
     chat_completion_multi_cfg,
-    classify_frames,
     classify_frames_cfg,
 )
 from app.review_manifest import SortReviewManifest
@@ -480,6 +478,7 @@ class SortWorker:
                     raw,
                     mode=_mode_name(),  # type: ignore[arg-type]
                     aliases=self.category_aliases,
+                    whitelist=self.tag_config.whitelist,
                 )
 
             def _uncategorized_result(reason: str, raw_text: str = "") -> ClassificationResult:
@@ -545,7 +544,7 @@ class SortWorker:
                 else:
                     category = merge_tags_by_priority(
                         [r.category for r in valid],
-                        whitelist=GENERAL_CATEGORY_WHITELIST if self.general_tag_mode else None,
+                        whitelist=self.tag_config.whitelist,
                     )
                     if category == UNCATEGORIZED:
                         category = max(valid, key=lambda r: r.confidence).category
