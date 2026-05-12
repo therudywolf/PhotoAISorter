@@ -116,6 +116,14 @@ def unique_dest_path(dest_dir: Path, filename: str) -> Path:
     raise OSError("could not find free destination name")
 
 
+def _tag_mode_for_session(cfg) -> str:
+    """Serialize tag config mode + profile into a session-storable string."""
+    from app.constants import SearchProfile
+    if cfg.mode == TagMode.PRESET:
+        return f"preset_{cfg.profile.value}"
+    return cfg.mode.value
+
+
 class SortWorker:
     def __init__(
         self,
@@ -272,7 +280,7 @@ class SortWorker:
                     )
             total = len(files)
             self._emit({"type": "scan_done", "total": total})
-            tag_mode = self.tag_config.mode.value
+            tag_mode = _tag_mode_for_session(self.tag_config)
             session_key = self.session_key or make_sort_session_key(
                 str(source_dir),
                 str(dest_dir),

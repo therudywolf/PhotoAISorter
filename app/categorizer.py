@@ -18,6 +18,8 @@ _LEGACY_TAG_ALIASES: dict[str, str] = {
     "cars_and_bmw": "vehicles_and_racing",
     "human_sfw": "humans_sfw",
     "human_real_sfw": "humans_sfw",
+    "human_nsfw_male": "humans_nsfw_male",
+    "human_nsfw_female": "humans_nsfw_female",
     "human_nsfw_solo_male": "humans_nsfw_male",
     "human_nsfw_solo_female": "humans_nsfw_female",
     "human_real_nsfw_male": "humans_nsfw_male",
