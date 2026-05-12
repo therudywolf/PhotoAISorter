@@ -1,4 +1,4 @@
-"""Unified tag configuration: TagMode enum, ResolvedTagConfig, and resolution logic.
+"""Unified tag configuration: TagMode enum, SearchProfile, ResolvedTagConfig, and resolution logic.
 
 This module is the single source of truth for how tag modes map to
 categories, descriptions, priority rules, and prompt behavior.
@@ -19,12 +19,13 @@ from app.constants import (
     PRIORITY_RULES_BLOCK,
     TAG_MERGE_PRIORITY,
     UNCATEGORIZED,
+    SearchProfile,
+    categories_for_profile,
 )
 
 
 class TagMode(str, Enum):
-    STRICT = "strict"
-    GENERAL = "general"
+    PRESET = "preset"
     AUTO = "auto"
     FREE = "free"
     CUSTOM = "custom"
@@ -44,6 +45,7 @@ class ResolvedTagConfig:
     priority_rules_text: str = ""
     user_context: str = ""
     whitelist: frozenset[str] | None = None
+    profile: SearchProfile = SearchProfile.SFW
 
     @property
     def is_free(self) -> bool:
@@ -51,20 +53,17 @@ class ResolvedTagConfig:
 
     @property
     def is_strict_whitelist(self) -> bool:
-        return self.mode in (TagMode.STRICT, TagMode.GENERAL, TagMode.CUSTOM)
+        return self.mode in (TagMode.PRESET, TagMode.CUSTOM)
 
 
 def resolve_tag_config(
     mode: TagMode,
     *,
+    profile: SearchProfile = SearchProfile.SFW,
     tag_store: Any = None,
     user_context_override: str = "",
 ) -> ResolvedTagConfig:
-    """Build a complete tag config from mode + optional custom TagStore.
-
-    For built-in modes (strict/general/auto/free), uses constants.
-    For custom mode, uses the active TagSet from the store.
-    """
+    """Build a complete tag config from mode + profile + optional custom TagStore."""
     from app.context_tags import get_active_set, build_custom_categories, build_custom_prompts, build_user_context_from_tags
 
     if mode == TagMode.CUSTOM:
@@ -84,65 +83,63 @@ def resolve_tag_config(
                 priority_rules_text="",
                 user_context=ctx,
                 whitelist=frozenset(cats) if cats else None,
+                profile=profile,
             )
-        return _fallback_strict_config(user_context_override)
+        return _fallback_config(profile, user_context_override)
 
-    # For all built-in modes, user_context comes from the active tag set (if any)
     ctx = user_context_override
     if not ctx and tag_store is not None:
         active = get_active_set(tag_store)
         if active:
             ctx = build_user_context_from_tags(active)
 
-    if mode == TagMode.GENERAL:
+    if mode == TagMode.PRESET:
+        cats = categories_for_profile(profile)
         return ResolvedTagConfig(
-            mode=TagMode.GENERAL,
-            categories=GENERAL_CATEGORIES,
+            mode=TagMode.PRESET,
+            categories=cats,
             prompts=CATEGORY_PROMPTS,
             priority=TAG_MERGE_PRIORITY,
             priority_rules_text=PRIORITY_RULES_BLOCK,
             user_context=ctx,
-            whitelist=GENERAL_CATEGORY_WHITELIST,
+            whitelist=frozenset(cats),
+            profile=profile,
         )
     elif mode == TagMode.AUTO:
+        cats = categories_for_profile(profile)
         return ResolvedTagConfig(
             mode=TagMode.AUTO,
-            categories=GENERAL_CATEGORIES,
+            categories=cats,
             prompts=CATEGORY_PROMPTS,
             priority=TAG_MERGE_PRIORITY,
             priority_rules_text=PRIORITY_RULES_BLOCK,
             user_context=ctx,
             whitelist=None,
+            profile=profile,
         )
-    elif mode == TagMode.FREE:
+    else:  # FREE
+        cats = categories_for_profile(profile)
         return ResolvedTagConfig(
             mode=TagMode.FREE,
-            categories=GENERAL_CATEGORIES,
+            categories=cats,
             prompts=CATEGORY_PROMPTS,
             priority=TAG_MERGE_PRIORITY,
             priority_rules_text=PRIORITY_RULES_BLOCK,
             user_context=ctx,
             whitelist=None,
-        )
-    else:
-        return ResolvedTagConfig(
-            mode=TagMode.STRICT,
-            categories=CATEGORIES,
-            prompts=CATEGORY_PROMPTS,
-            priority=TAG_MERGE_PRIORITY,
-            priority_rules_text=PRIORITY_RULES_BLOCK,
-            user_context=ctx,
-            whitelist=CANONICAL_CATEGORY_WHITELIST,
+            profile=profile,
         )
 
 
-def _fallback_strict_config(user_context: str = "") -> ResolvedTagConfig:
+def _fallback_config(profile: SearchProfile = SearchProfile.SFW, user_context: str = "") -> ResolvedTagConfig:
+    cats = categories_for_profile(profile)
     return ResolvedTagConfig(
-        mode=TagMode.STRICT,
-        categories=CATEGORIES,
+        mode=TagMode.PRESET,
+        categories=cats,
         prompts=CATEGORY_PROMPTS,
         priority=TAG_MERGE_PRIORITY,
         priority_rules_text=PRIORITY_RULES_BLOCK,
         user_context=user_context,
-        whitelist=CANONICAL_CATEGORY_WHITELIST,
+        whitelist=frozenset(cats),
+        profile=profile,
     )

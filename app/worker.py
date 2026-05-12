@@ -163,15 +163,15 @@ class SortWorker:
             elif free_tag_mode:
                 mode = TagMode.FREE
             elif general_tag_mode:
-                mode = TagMode.GENERAL
+                mode = TagMode.PRESET
             else:
-                mode = TagMode.STRICT
+                mode = TagMode.PRESET
             from app.tag_config import resolve_tag_config
             self.tag_config = resolve_tag_config(mode)
 
         self.free_tag_mode = self.tag_config.mode in (TagMode.FREE,)
         self.auto_tag_mode = self.tag_config.mode in (TagMode.AUTO,)
-        self.general_tag_mode = self.tag_config.mode in (TagMode.GENERAL,)
+        self.general_tag_mode = self.tag_config.mode in (TagMode.PRESET,)
         self.custom_categories = (
             self.tag_config.categories if self.tag_config.mode == TagMode.CUSTOM else None
         )

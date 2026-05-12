@@ -8,9 +8,10 @@ __pycache__/
 *$py.class
 .Python
 
-# App data
+# App data (local user presets and state)
 *.sqlite3
 context_tags.json
+local_presets.json
 
 # Testing / linting
 .pytest_cache/

@@ -6,7 +6,7 @@ A TagSet is a named collection of tags. Each tag has:
 
 When a custom TagSet is active, the model uses ONLY those tags as output categories.
 Tags with descriptions get their descriptions injected into the prompt,
-giving the model recognition instructions (e.g. "my_dog: Black Labrador, friendly").
+giving the model recognition instructions (e.g. "my_pet: Black Labrador, friendly").
 
 Stored locally in context_tags.json.
 """
@@ -74,7 +74,7 @@ def load_tag_store() -> TagStore:
                         description=str(t.get("description", "")),
                     ))
             if migrated_tags:
-                sets.append(TagSet(name="Мои теги", tags=migrated_tags))
+                sets.append(TagSet(name="My tags", tags=migrated_tags))
             for cl in raw.get("custom_lists", []):
                 if isinstance(cl, dict) and cl.get("name"):
                     cl_tags = [Tag(key=c) for c in cl.get("categories", []) if c]

@@ -10,7 +10,7 @@ def test_load_project_env_reads_local_without_overriding(tmp_path: Path, monkeyp
     monkeypatch.delenv("PHOTO_AI_SORTER_MODEL", raising=False)
     monkeypatch.setenv("PHOTO_AI_SORTER_API_KEY", "existing")
     (tmp_path / ".env.local").write_text(
-        "PHOTO_AI_SORTER_API_BASE=http://10.77.77.2:29931\n"
+        "PHOTO_AI_SORTER_API_BASE=http://192.168.1.100:1234\n"
         "PHOTO_AI_SORTER_API_KEY=local-secret\n"
         "PHOTO_AI_SORTER_MODEL='vision-model'\n",
         encoding="utf-8",
@@ -19,6 +19,6 @@ def test_load_project_env_reads_local_without_overriding(tmp_path: Path, monkeyp
     assert loaded == [tmp_path / ".env.local"]
     import os
 
-    assert os.environ["PHOTO_AI_SORTER_API_BASE"] == "http://10.77.77.2:29931"
+    assert os.environ["PHOTO_AI_SORTER_API_BASE"] == "http://192.168.1.100:1234"
     assert os.environ["PHOTO_AI_SORTER_API_KEY"] == "existing"
     assert os.environ["PHOTO_AI_SORTER_MODEL"] == "vision-model"

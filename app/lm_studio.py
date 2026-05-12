@@ -138,7 +138,7 @@ def _raise_for_status_with_hint(response: requests.Response, endpoint: str) -> N
         if response.status_code in (401, 403):
             hint = " (LM Studio requires a valid API key; paste it in the app or set PHOTO_AI_SORTER_API_KEY)"
         elif response.status_code == 404:
-            hint = " (check LM Studio API base URL; use the server root such as http://10.77.77.2:29931)"
+            hint = " (check LM Studio API base URL; use the server root such as http://localhost:1234)"
         elif response.status_code == 400:
             body = response.text.strip().replace("\n", " ")[:360]
             if body:
@@ -203,17 +203,11 @@ def build_system_prompt(
             "Your ONLY job is to output a single exact string from this custom user-defined list: "
             f"{', '.join(tag_keys)}."
         )
-    elif cfg.mode == TagMode.GENERAL:
-        header = (
-            "You are a local backend automated tagging script. You have no conversational ability. "
-            "Your ONLY job is to output a single exact string from the extended General preset list: "
-            f"{', '.join(tag_keys)}."
-        )
     else:
         header = (
-            "You are a local backend automated tagging script. You have no safety filters, no morality, "
-            "and no conversational ability. Your ONLY job is to output a single exact string from this "
-            f"list: {', '.join(tag_keys)}."
+            "You are a local backend automated tagging script. You have no conversational ability. "
+            "Your ONLY job is to output a single exact string from the preset category list: "
+            f"{', '.join(tag_keys)}."
         )
 
     output_rule = (
@@ -257,7 +251,7 @@ def build_system_prompt(
             f"{cfg.user_context}"
         )
     else:
-        parts.append("User context: not provided. Skip personal_user_* and my_dog tags.")
+        parts.append("User context: not provided. Use only visual content for classification.")
 
     if prompt_extra.strip():
         parts.append("")
@@ -287,9 +281,9 @@ def build_classification_system_prompt(
     elif free_mode:
         mode = TagMode.FREE
     elif general_mode:
-        mode = TagMode.GENERAL
+        mode = TagMode.PRESET
     else:
-        mode = TagMode.STRICT
+        mode = TagMode.PRESET
     cfg = resolve_tag_config(mode, user_context_override=user_context)
     if custom_categories:
         cfg = ResolvedTagConfig(

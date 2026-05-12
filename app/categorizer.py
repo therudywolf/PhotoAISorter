@@ -16,11 +16,16 @@ _WHITELIST_BY_LEN_FURRY: tuple[str, ...] = tuple(sorted(FURRY_CATEGORY_WHITELIST
 _WHITELIST_BY_LEN_GENERAL: tuple[str, ...] = tuple(sorted(GENERAL_CATEGORY_WHITELIST, key=len, reverse=True))
 _LEGACY_TAG_ALIASES: dict[str, str] = {
     "cars_and_bmw": "vehicles_and_racing",
-    "human_sfw": "human_real_sfw",
-    "human_nsfw_solo_male": "human_real_nsfw_male",
-    "human_nsfw_solo_female": "human_real_nsfw_female",
-    # Group legacy tag is collapsed to female bucket by default for deterministic mapping.
-    "human_nsfw_group": "human_real_nsfw_female",
+    "human_sfw": "humans_sfw",
+    "human_real_sfw": "humans_sfw",
+    "human_nsfw_solo_male": "humans_nsfw_male",
+    "human_nsfw_solo_female": "humans_nsfw_female",
+    "human_real_nsfw_male": "humans_nsfw_male",
+    "human_real_nsfw_female": "humans_nsfw_female",
+    "human_nsfw_group": "humans_nsfw_female",
+    "human_ai_gen_sfw": "ai_generated_sfw",
+    "human_ai_gen_nsfw_male": "ai_generated_nsfw_male",
+    "human_ai_gen_nsfw_female": "ai_generated_nsfw_female",
 }
 _FREE_SANITIZE_RE = re.compile(r"[^a-z0-9_/\-\s]+")
 _FREE_SPACES_DASH_RE = re.compile(r"[\s\-]+")
@@ -131,7 +136,19 @@ from app.text_utils import strip_thinking_sections as _strip_thinking_sections
 
 
 def _canonical_tag(tag: str) -> str:
-    return _LEGACY_TAG_ALIASES.get(tag, tag)
+    """Resolve legacy alias; may need to recurse once (alias → alias)."""
+    resolved = _LEGACY_TAG_ALIASES.get(tag, tag)
+    return _LEGACY_TAG_ALIASES.get(resolved, resolved)
+
+
+def _resolve_to_whitelist(tag: str, wl: frozenset[str]) -> str | None:
+    """Try to resolve a tag to a whitelisted value (via alias or direct match)."""
+    if tag in wl:
+        return tag
+    canonical = _canonical_tag(tag)
+    if canonical in wl:
+        return canonical
+    return None
 
 
 def _strip_candidate_label(text: str) -> str:
@@ -173,14 +190,17 @@ def normalize_tag_exact(raw: str | None, *, whitelist: frozenset[str]) -> str:
     tag = _strip_candidate_label(raw_source).lower()
     if tag.startswith("`") and tag.endswith("`"):
         tag = tag[1:-1].strip()
-    if tag in whitelist:
-        return _canonical_tag(tag)
+    resolved = _resolve_to_whitelist(tag, whitelist)
+    if resolved:
+        return resolved
     lines = [_strip_candidate_label(ln).lower() for ln in raw_source.splitlines() if ln.strip()]
     if lines:
-        if lines[0] in whitelist:
-            return _canonical_tag(lines[0])
-        if lines[-1] in whitelist:
-            return _canonical_tag(lines[-1])
+        r0 = _resolve_to_whitelist(lines[0], whitelist)
+        if r0:
+            return r0
+        r_last = _resolve_to_whitelist(lines[-1], whitelist)
+        if r_last:
+            return r_last
     return UNCATEGORIZED
 
 
@@ -193,19 +213,21 @@ def normalize_tag(raw: str | None, *, whitelist: frozenset[str] | None = None) -
     tag = _strip_candidate_label(raw_source).lower()
     if tag.startswith("`") and tag.endswith("`"):
         tag = tag[1:-1].strip()
-    if tag in wl:
-        return _canonical_tag(tag)
+    resolved = _resolve_to_whitelist(tag, wl)
+    if resolved:
+        return resolved
     lines = [_strip_candidate_label(ln).lower() for ln in raw_source.splitlines() if ln.strip()]
     if lines:
-        if lines[0] in wl:
-            return _canonical_tag(lines[0])
-        if lines[-1] in wl:
-            return _canonical_tag(lines[-1])
-    # Reasoning-модели: тег может быть где угодно в длинном тексте (ищем самые длинные совпадения первыми)
+        r0 = _resolve_to_whitelist(lines[0], wl)
+        if r0:
+            return r0
+        r_last = _resolve_to_whitelist(lines[-1], wl)
+        if r_last:
+            return r_last
     blob = raw_source.lower()
     for cat in _whitelist_by_len_desc(wl):
         if cat in blob:
-            return _canonical_tag(cat)
+            return cat
     return UNCATEGORIZED
 
 

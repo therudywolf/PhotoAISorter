@@ -84,13 +84,36 @@ _MEDIA_MODE_LABELS = {
 _MEDIA_MODE_VALUES = {v: k for k, v in _MEDIA_MODE_LABELS.items()}
 
 _TAG_MODE_LABELS = {
-    "general": "Общий",
-    "strict": "Furry",
+    "preset_sfw": "SFW",
+    "preset_nsfw": "NSFW",
+    "preset_furry_sfw": "Furry SFW",
+    "preset_furry_nsfw": "Furry NSFW",
     "auto": "Авто",
     "free": "Свободно",
     "custom": "Свой список",
 }
 _TAG_MODE_VALUES = {v: k for k, v in _TAG_MODE_LABELS.items()}
+
+
+def _parse_tag_mode_str(tag_mode_str: str) -> tuple:
+    """Convert internal tag mode string to (TagMode, SearchProfile) pair."""
+    from app.constants import SearchProfile
+    if tag_mode_str == "preset_sfw":
+        return (TagMode.PRESET, SearchProfile.SFW)
+    elif tag_mode_str == "preset_nsfw":
+        return (TagMode.PRESET, SearchProfile.NSFW)
+    elif tag_mode_str == "preset_furry_sfw":
+        return (TagMode.PRESET, SearchProfile.FURRY_SFW)
+    elif tag_mode_str == "preset_furry_nsfw":
+        return (TagMode.PRESET, SearchProfile.FURRY_NSFW)
+    elif tag_mode_str == "auto":
+        return (TagMode.AUTO, SearchProfile.SFW)
+    elif tag_mode_str == "free":
+        return (TagMode.FREE, SearchProfile.SFW)
+    elif tag_mode_str == "custom":
+        return (TagMode.CUSTOM, SearchProfile.SFW)
+    else:
+        return (TagMode.PRESET, SearchProfile.SFW)
 
 
 class App(ctk.CTk):
@@ -150,12 +173,17 @@ class App(ctk.CTk):
             value=_MEDIA_MODE_LABELS.get(mm, _MEDIA_MODE_LABELS[MediaScanMode.PHOTOS_ONLY.value])
         )
         _saved_mode = str(saved.get("tag_mode", "") or "").strip()
-        if _saved_mode not in {"strict", "general", "free", "auto", "custom"}:
+        _mode_migration = {
+            "strict": "preset_furry_nsfw",
+            "general": "preset_furry_nsfw",
+        }
+        _saved_mode = _mode_migration.get(_saved_mode, _saved_mode)
+        if _saved_mode not in _TAG_MODE_LABELS:
             _saved_free = bool(saved.get("free_tag_mode", False))
-            _saved_mode = "free" if _saved_free else "strict"
+            _saved_mode = "free" if _saved_free else "preset_sfw"
         self._tag_mode_var = ctk.StringVar(value=_saved_mode)
         self._tag_mode_label_var = ctk.StringVar(
-            value=_TAG_MODE_LABELS.get(_saved_mode, _TAG_MODE_LABELS["strict"])
+            value=_TAG_MODE_LABELS.get(_saved_mode, _TAG_MODE_LABELS["preset_sfw"])
         )
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))
         self._review_first_var = ctk.BooleanVar(value=bool(saved.get("review_first_sort", False)))
@@ -246,7 +274,7 @@ class App(ctk.CTk):
         row_tag_mode.pack(fill="x", padx=8, pady=(0, 4))
         ctk.CTkSegmentedButton(
             row_tag_mode,
-            values=[_TAG_MODE_LABELS[k] for k in ("general", "strict", "auto", "free", "custom")],
+            values=[_TAG_MODE_LABELS[k] for k in ("preset_sfw", "preset_nsfw", "preset_furry_sfw", "preset_furry_nsfw", "auto", "free", "custom")],
             variable=self._tag_mode_label_var,
             command=self._on_tag_mode_label_change,
         ).pack(fill="x", expand=True)
@@ -480,7 +508,7 @@ class App(ctk.CTk):
             self._tag_mode_var.set(value)
 
     def _on_tag_mode_value_changed(self) -> None:
-        label = _TAG_MODE_LABELS.get(self._tag_mode_var.get(), _TAG_MODE_LABELS["strict"])
+        label = _TAG_MODE_LABELS.get(self._tag_mode_var.get(), _TAG_MODE_LABELS["preset_sfw"])
         if self._tag_mode_label_var.get() != label:
             self._tag_mode_label_var.set(label)
         self._update_tag_mode_hint()
@@ -491,30 +519,27 @@ class App(ctk.CTk):
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_free"))
         elif mode == "auto":
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_auto"))
-        elif mode == "general":
-            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_general"))
         elif mode == "custom":
             self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_custom"))
         else:
-            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_strict"))
+            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_preset"))
 
     def _show_canonical_tags_dialog(self) -> None:
         win = ctk.CTkToplevel(self)
         mode = self._tag_mode_var.get()
-        if mode == "strict":
-            win.title(t("folders.tags.dialog_title_furry"))
-            categories = CANONICAL_CATEGORIES
-        elif mode == "general":
-            win.title(t("folders.tags.dialog_title_general"))
-            categories = GENERAL_CATEGORIES
-        elif mode == "custom":
+        if mode == "custom":
             win.title("Свой список категорий")
             _store = load_tag_store()
             _aset = get_active_set(_store)
             categories = build_custom_categories(_aset) if _aset else ()
-        else:
+        elif mode in ("auto", "free"):
             win.title(t("folders.tags.dialog_title_reference"))
             categories = GENERAL_CATEGORIES
+        else:
+            win.title(t("folders.tags.dialog_title_preset"))
+            _mode, _profile = _parse_tag_mode_str(mode)
+            from app.constants import categories_for_profile
+            categories = categories_for_profile(_profile)
         win.geometry("480x520")
         win.transient(self)
         tb = ctk.CTkTextbox(win, font=ctk.CTkFont(size=12))
@@ -696,8 +721,10 @@ class App(ctk.CTk):
         mm = str(row["media_mode"] or MediaScanMode.PHOTOS_ONLY.value)
         if mm in {m.value for m in MediaScanMode}:
             self._media_mode_var.set(mm)
-        tag_mode = str(row["tag_mode"] or "strict")
-        if tag_mode in {"strict", "general", "auto", "free"}:
+        tag_mode = str(row["tag_mode"] or "preset_sfw")
+        _mode_migration = {"strict": "preset_furry_nsfw", "general": "preset_furry_nsfw"}
+        tag_mode = _mode_migration.get(tag_mode, tag_mode)
+        if tag_mode in _TAG_MODE_LABELS:
             self._tag_mode_var.set(tag_mode)
         self._review_first_var.set(bool(int(row["review_first"] or 0)))
 
@@ -995,12 +1022,10 @@ class App(ctk.CTk):
         except ValueError:
             media_mode = MediaScanMode.PHOTOS_ONLY
         tag_mode_str = self._tag_mode_var.get()
-        try:
-            tag_mode = TagMode(tag_mode_str)
-        except ValueError:
-            tag_mode = TagMode.STRICT
+        tag_mode, search_profile = _parse_tag_mode_str(tag_mode_str)
 
-        tag_cfg = resolve_tag_config(tag_mode, tag_store=_tag_store)
+        from app.constants import SearchProfile
+        tag_cfg = resolve_tag_config(tag_mode, profile=search_profile, tag_store=_tag_store)
 
         if tag_mode == TagMode.CUSTOM and not tag_cfg.categories:
             self._append_log("Ошибка: нет активного набора тегов или он пуст. Откройте «Теги...» и настройте.")
@@ -1034,10 +1059,8 @@ class App(ctk.CTk):
             self._append_log("Сессия: продолжение сохранённого прогресса.")
         else:
             self._append_log("Сессия: новая или без найденного незавершённого прогресса.")
-        if tag_mode == TagMode.STRICT:
-            self._append_log(t("sort.log_mode_strict"))
-        elif tag_mode == TagMode.GENERAL:
-            self._append_log(t("sort.log_mode_general"))
+        if tag_mode == TagMode.PRESET:
+            self._append_log(t("sort.log_mode_preset", profile=search_profile.value))
         elif tag_mode == TagMode.AUTO:
             self._append_log(t("sort.log_mode_auto"))
         elif tag_mode == TagMode.CUSTOM:

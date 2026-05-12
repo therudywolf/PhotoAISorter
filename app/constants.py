@@ -1,4 +1,4 @@
-﻿"""Application constants: categories, API defaults, image limits."""
+﻿"""Application constants: categories, search profiles, API defaults, image limits."""
 
 from __future__ import annotations
 
@@ -9,23 +9,26 @@ from app.local_env import load_project_env
 
 load_project_env()
 
-# Canonical output folders for the «furry» preset (strict tag mode).
-CANONICAL_CATEGORIES: tuple[str, ...] = (
-    "explicit_zoo_real_animal",
-    "furry_nsfw_canidae",
-    "furry_nsfw_other",
-    "furry_sfw_canidae",
-    "furry_sfw_other",
-    "human_real_nsfw_female",
-    "human_real_nsfw_male",
-    "human_real_sfw",
-    "human_ai_gen_nsfw_female",
-    "human_ai_gen_nsfw_male",
-    "human_ai_gen_sfw",
-    "personal_user_sfw",
-    "personal_user_nsfw",
-    "my_dog",
-    "puppy_play",
+
+# ---------------------------------------------------------------------------
+# Search profiles: combine content-safety and style filters
+# ---------------------------------------------------------------------------
+
+class SearchProfile(str, Enum):
+    """Pre-built tag set profiles for the fixed-list sort modes."""
+    SFW = "sfw"
+    NSFW = "nsfw"
+    FURRY_SFW = "furry_sfw"
+    FURRY_NSFW = "furry_nsfw"
+
+
+# ---------------------------------------------------------------------------
+# Base SFW categories (included in ALL profiles)
+# ---------------------------------------------------------------------------
+
+BASE_SFW_CATEGORIES: tuple[str, ...] = (
+    "humans_sfw",
+    "ai_generated_sfw",
     "real_animals",
     "vehicles_and_racing",
     "memes_and_screenshots",
@@ -33,19 +36,36 @@ CANONICAL_CATEGORIES: tuple[str, ...] = (
     "uncategorized",
 )
 
-# «Furry» preset: exact tag strings for strict mode (canonical + legacy aliases).
-CATEGORIES: tuple[str, ...] = (
-    *CANONICAL_CATEGORIES,
-    # Legacy tags (kept for backwards compatibility and prompt understanding)
-    "human_nsfw_solo_male",
-    "human_nsfw_solo_female",
-    "human_nsfw_group",
-    "human_sfw",
-    "cars_and_bmw",
+# ---------------------------------------------------------------------------
+# NSFW addon categories (included when profile allows NSFW)
+# ---------------------------------------------------------------------------
+
+NSFW_ADDON_CATEGORIES: tuple[str, ...] = (
+    "humans_nsfw_female",
+    "humans_nsfw_male",
+    "ai_generated_nsfw_female",
+    "ai_generated_nsfw_male",
 )
 
-# «Общий» preset: furry tags plus extra buckets for geek / IT / car culture / nightlife / LGBTQ+ galleries.
-GENERAL_EXTRA_CATEGORIES: tuple[str, ...] = (
+# ---------------------------------------------------------------------------
+# Furry addon categories
+# ---------------------------------------------------------------------------
+
+FURRY_SFW_ADDON_CATEGORIES: tuple[str, ...] = (
+    "furry_sfw_canidae",
+    "furry_sfw_other",
+)
+
+FURRY_NSFW_ADDON_CATEGORIES: tuple[str, ...] = (
+    "furry_nsfw_canidae",
+    "furry_nsfw_other",
+)
+
+# ---------------------------------------------------------------------------
+# Extended general categories (tech, hobby, lifestyle — always SFW)
+# ---------------------------------------------------------------------------
+
+EXTENDED_CATEGORIES: tuple[str, ...] = (
     "tech_desk_setup",
     "pc_build_and_hardware",
     "coding_ide_and_terminal",
@@ -61,59 +81,96 @@ GENERAL_EXTRA_CATEGORIES: tuple[str, ...] = (
     "coffee_and_food_aesthetic",
     "music_festival_live",
     "travel_urban_explore",
-    "pride_and_lgbt_events",
-    "gay_male_nsfw_solo",
-    "gay_male_nsfw_couple",
-    "queer_art_sfw",
     "tattoos_and_body_art",
     "streaming_and_webcam",
     "sci_fi_collectibles",
 )
 
-GENERAL_CATEGORIES: tuple[str, ...] = (*CATEGORIES, *GENERAL_EXTRA_CATEGORIES)
 
-FURRY_CATEGORY_WHITELIST: frozenset[str] = frozenset(CATEGORIES)
-GENERAL_CATEGORY_WHITELIST: frozenset[str] = frozenset(GENERAL_CATEGORIES)
+# ---------------------------------------------------------------------------
+# Profile → category assembly
+# ---------------------------------------------------------------------------
 
-CANONICAL_CATEGORY_WHITELIST: frozenset[str] = frozenset(CANONICAL_CATEGORIES)
+def categories_for_profile(profile: SearchProfile) -> tuple[str, ...]:
+    """Assemble the full category list for a given search profile."""
+    cats: list[str] = list(BASE_SFW_CATEGORIES[:-1])  # exclude uncategorized (add last)
+    cats.extend(EXTENDED_CATEGORIES)
+
+    if profile in (SearchProfile.NSFW, SearchProfile.FURRY_NSFW):
+        cats.extend(NSFW_ADDON_CATEGORIES)
+
+    if profile in (SearchProfile.FURRY_SFW, SearchProfile.FURRY_NSFW):
+        cats.extend(FURRY_SFW_ADDON_CATEGORIES)
+
+    if profile == SearchProfile.FURRY_NSFW:
+        cats.extend(FURRY_NSFW_ADDON_CATEGORIES)
+
+    cats.append("uncategorized")
+    return tuple(cats)
+
+
+# Precomputed category tuples for each profile
+SFW_CATEGORIES: tuple[str, ...] = categories_for_profile(SearchProfile.SFW)
+NSFW_CATEGORIES: tuple[str, ...] = categories_for_profile(SearchProfile.NSFW)
+FURRY_SFW_CATEGORIES: tuple[str, ...] = categories_for_profile(SearchProfile.FURRY_SFW)
+FURRY_NSFW_CATEGORIES: tuple[str, ...] = categories_for_profile(SearchProfile.FURRY_NSFW)
+
+# Default categories used when no profile is specified
+CATEGORIES: tuple[str, ...] = NSFW_CATEGORIES
+GENERAL_CATEGORIES: tuple[str, ...] = FURRY_NSFW_CATEGORIES
+
+# Whitelists (frozen sets for fast lookup)
+CANONICAL_CATEGORIES: tuple[str, ...] = SFW_CATEGORIES
+CANONICAL_CATEGORY_WHITELIST: frozenset[str] = frozenset(SFW_CATEGORIES)
+GENERAL_CATEGORY_WHITELIST: frozenset[str] = frozenset(FURRY_NSFW_CATEGORIES)
+FURRY_CATEGORY_WHITELIST: frozenset[str] = frozenset(FURRY_NSFW_CATEGORIES)
 
 UNCATEGORIZED = "uncategorized"
 
-# Правила приоритета при конфликте триггеров (вставляется в системный промпт целиком)
+
+# ---------------------------------------------------------------------------
+# Priority rules (generic — no personal references)
+# ---------------------------------------------------------------------------
+
 PRIORITY_RULES_BLOCK: str = """
 PRIORITY RESOLUTION (mandatory). If several categories could apply, output exactly ONE tag using this order (highest first):
 
-PRIORITY 1 — Owner, dog, fetish (prefer the first that truly matches):
-  personal_user_nsfw → personal_user_sfw → my_dog → puppy_play
+PRIORITY 1 — Furry NSFW (if applicable): furry_nsfw_canidae, furry_nsfw_other
 
-PRIORITY 2 — Furry content (NSFW before SFW when both apply): furry_nsfw_canidae, furry_nsfw_other, then furry_sfw_canidae, furry_sfw_other
+PRIORITY 2 — Furry SFW: furry_sfw_canidae, furry_sfw_other
 
-PRIORITY 3 — Human photo NSFW: human_real_nsfw_male, human_real_nsfw_female
+PRIORITY 3 — Human NSFW: humans_nsfw_male, humans_nsfw_female
 
-PRIORITY 4 — Human AI-generated NSFW: human_ai_gen_nsfw_male, human_ai_gen_nsfw_female
+PRIORITY 4 — AI-generated NSFW: ai_generated_nsfw_male, ai_generated_nsfw_female
 
-PRIORITY 5 — Explicit zoophilia with real animal: explicit_zoo_real_animal
+PRIORITY 5 — Vehicles: vehicles_and_racing
 
-PRIORITY 6 — Vehicles: vehicles_and_racing
-
-PRIORITY 7 — Everything else: human_real_sfw, human_ai_gen_sfw, real_animals, memes_and_screenshots, landscapes_and_objects, or uncategorized as appropriate.
+PRIORITY 6 — Everything else: humans_sfw, ai_generated_sfw, real_animals, memes_and_screenshots, landscapes_and_objects, or uncategorized as appropriate.
 """.strip()
 
-# Описание для каждого тега (редактируйте здесь)
+
+# ---------------------------------------------------------------------------
+# Category descriptions (for the LLM system prompt)
+# ---------------------------------------------------------------------------
+
 CATEGORY_PROMPTS: dict[str, str] = {
-    "personal_user_sfw": (
-        "The app owner, safe-for-work only. Match USER_CONTEXT description. "
-        "No nudity or explicit sexual content."
+    "humans_sfw": (
+        "Real or AI-generated humans, safe-for-work. No nudity or explicit content."
     ),
-    "personal_user_nsfw": (
-        "The app owner, NSFW or nudity. Match USER_CONTEXT description "
-        "when clearly the same person."
+    "humans_nsfw_female": (
+        "Real human female, NSFW or nudity."
     ),
-    "my_dog": (
-        "The owner's specific dog/pet. Match USER_CONTEXT description. Not generic real_animals."
+    "humans_nsfw_male": (
+        "Real human male, NSFW or nudity."
     ),
-    "puppy_play": (
-        "Puppy play / pet play kink: gear or roleplay (hoods, collars, bone tags, etc.), any intensity; use when theme is central."
+    "ai_generated_sfw": (
+        "AI-generated image, SFW. Digital art, renders, or neural network outputs without explicit content."
+    ),
+    "ai_generated_nsfw_female": (
+        "AI-generated female, NSFW or nudity."
+    ),
+    "ai_generated_nsfw_male": (
+        "AI-generated male, NSFW or nudity."
     ),
     "furry_nsfw_canidae": (
         "NSFW anthropomorphic art: clearly canine (wolf, dog, fox, etc.). Explicit sexual content."
@@ -127,61 +184,24 @@ CATEGORY_PROMPTS: dict[str, str] = {
     "furry_sfw_other": (
         "SFW furry art: non-canine characters; no explicit sexual content."
     ),
-    "human_real_nsfw_female": (
-        "Photorealistic real human female, NSFW or nudity. Not the app owner."
-    ),
-    "human_real_nsfw_male": (
-        "Photorealistic real human male, NSFW or nudity. Not the app owner."
-    ),
-    "human_real_sfw": (
-        "Photorealistic real humans (any gender), SFW. Not the app owner."
-    ),
-    "human_ai_gen_nsfw_female": (
-        "AI-generated female human, NSFW or nudity."
-    ),
-    "human_ai_gen_nsfw_male": (
-        "AI-generated male human, NSFW or nudity."
-    ),
-    "human_ai_gen_sfw": (
-        "AI-generated human, SFW."
-    ),
-    "explicit_zoo_real_animal": (
-        "Explicit NSFW scene involving a real animal and human (zoophilia context)."
-    ),
     "vehicles_and_racing": (
         "Vehicles and racing: cars, bikes, motorsport, driving POV, car meets."
     ),
     "real_animals": (
-        "Real animals in photos; not anthropomorphic art; not the owner's pet (my_dog, see USER_CONTEXT)."
+        "Real animals in photos; not anthropomorphic art."
     ),
     "memes_and_screenshots": (
         "Text-heavy images, UI screenshots, memes, social media captures."
     ),
     "landscapes_and_objects": (
-        "Dark aesthetics, neon, empty rooms, landscapes, inanimate objects as main subject."
+        "Landscapes, architecture, inanimate objects, abstract backgrounds."
     ),
     "uncategorized": (
         "Ambiguous, severe visual noise, or does not fit any tag clearly."
     ),
-    # Legacy-compatible descriptions
-    "human_nsfw_solo_male": (
-        "Legacy alias for human_real_nsfw_male."
-    ),
-    "human_nsfw_solo_female": (
-        "Legacy alias for human_real_nsfw_female."
-    ),
-    "human_nsfw_group": (
-        "Legacy alias for human_real_nsfw_female or human_real_nsfw_male depending on dominant subject."
-    ),
-    "human_sfw": (
-        "Legacy alias for human_real_sfw."
-    ),
-    "cars_and_bmw": (
-        "Legacy alias for vehicles_and_racing."
-    ),
-    # --- «Общий» preset: extra categories (after furry list) ---
+    # Extended categories
     "tech_desk_setup": (
-        "Desk / battlestation: monitors, peripherals, cable management, home office rig (not a full PC build teardown)."
+        "Desk / battlestation: monitors, peripherals, cable management, home office rig."
     ),
     "pc_build_and_hardware": (
         "PC internals and hardware focus: GPUs, motherboards, cooling, benchmarks, component boxes."
@@ -193,10 +213,10 @@ CATEGORY_PROMPTS: dict[str, str] = {
         "In-game UI, HUD, menus, achievements, match results; gameplay screen as primary content."
     ),
     "gaming_room_setup": (
-        "Gaming space: consoles, RGB rigs, posters, shelves of games; not only a generic desk photo."
+        "Gaming space: consoles, RGB rigs, posters, shelves of games."
     ),
     "anime_and_manga": (
-        "Anime / manga art, covers, figures posed as collectibles, cosplay clearly referencing 2D franchises."
+        "Anime / manga art, covers, figures posed as collectibles, cosplay referencing 2D franchises."
     ),
     "comics_and_superheroes": (
         "Western comics, superhero merch, comic con cosplay (non-anime), graphic novel art."
@@ -211,7 +231,7 @@ CATEGORY_PROMPTS: dict[str, str] = {
         "Gym training, progress pics, sportswear, weights and machines as main subject."
     ),
     "car_mods_and_meets": (
-        "Modified cars, stance, wraps, car-meet culture; use when tuning/meet vibe matters more than generic driving."
+        "Modified cars, stance, wraps, car-meet culture; tuning/meet vibe rather than generic driving."
     ),
     "nightlife_party": (
         "Club, party, bar night, dance floor lighting, social night-out photos."
@@ -225,18 +245,6 @@ CATEGORY_PROMPTS: dict[str, str] = {
     "travel_urban_explore": (
         "City travel, street exploration, architecture walks; not pure landscape wallpaper."
     ),
-    "pride_and_lgbt_events": (
-        "Pride parades, rainbow flags, LGBT community events, protest or celebration context."
-    ),
-    "gay_male_nsfw_solo": (
-        "NSFW male-presenting solo erotic content; not the app owner unless USER_CONTEXT matches."
-    ),
-    "gay_male_nsfw_couple": (
-        "NSFW male+male couple erotic content; not the app owner unless USER_CONTEXT matches."
-    ),
-    "queer_art_sfw": (
-        "SFW queer-themed illustration or photography without explicit sex acts."
-    ),
     "tattoos_and_body_art": (
         "Tattoos, piercings, body art close-ups as the primary subject."
     ),
@@ -248,7 +256,52 @@ CATEGORY_PROMPTS: dict[str, str] = {
     ),
 }
 
-# Статичные изображения (без .gif — см. режим сканирования)
+
+# ---------------------------------------------------------------------------
+# Tag merge priority (for multi-frame video classification)
+# ---------------------------------------------------------------------------
+
+TAG_MERGE_PRIORITY: tuple[str, ...] = (
+    "furry_nsfw_canidae",
+    "furry_nsfw_other",
+    "furry_sfw_canidae",
+    "furry_sfw_other",
+    "humans_nsfw_male",
+    "humans_nsfw_female",
+    "ai_generated_nsfw_male",
+    "ai_generated_nsfw_female",
+    "vehicles_and_racing",
+    "humans_sfw",
+    "ai_generated_sfw",
+    "real_animals",
+    "memes_and_screenshots",
+    "landscapes_and_objects",
+    "tech_desk_setup",
+    "pc_build_and_hardware",
+    "coding_ide_and_terminal",
+    "gaming_ui_screenshots",
+    "gaming_room_setup",
+    "anime_and_manga",
+    "comics_and_superheroes",
+    "board_games_tabletop",
+    "sneakers_and_streetwear",
+    "gym_and_fitness",
+    "car_mods_and_meets",
+    "nightlife_party",
+    "coffee_and_food_aesthetic",
+    "music_festival_live",
+    "travel_urban_explore",
+    "tattoos_and_body_art",
+    "streaming_and_webcam",
+    "sci_fi_collectibles",
+    "uncategorized",
+)
+
+
+# ---------------------------------------------------------------------------
+# Media file extensions
+# ---------------------------------------------------------------------------
+
 STILL_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     {
         ".jpg",
@@ -264,7 +317,6 @@ STILL_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     }
 )
 
-# Видеоконтейнеры (не GIF)
 VIDEO_EXTENSIONS: frozenset[str] = frozenset(
     {
         ".mp4",
@@ -287,84 +339,31 @@ GIF_EXTENSION = ".gif"
 
 VIDEO_FRAME_COUNT = 3
 
-# ffmpeg: папка ffmpeg-runtime/bin рядом с проектом (run.bat добавляет в PATH) или
-# PHOTO_AI_SORTER_FFMPEG / PHOTO_AI_SORTER_FFPROBE — полный путь при необходимости.
-
-# Доли длительности (0..1) для выборочных кадров — без полного прогона видео
 VIDEO_SAMPLE_FRACTIONS: tuple[float, ...] = (0.0, 0.5, 1.0)
-
-# Окно декода после seek: ffmpeg читает только короткий отрезок, не весь файл
 VIDEO_FRAGMENT_DECODE_SEC = 0.15
-
-# Таймаут одного вызова ffmpeg на кадр (сек)
 FFMPEG_FRAME_TIMEOUT_SEC = 45.0
 
-# Версия пайплайна (категории / кадры / промпт): смена → переобработка в БД
-PIPELINE_VERSION = "2026-05-11-general-preset-v5"
+PIPELINE_VERSION = "2026-05-12-generic-profiles-v1"
 
-# Запас свободного места при копировании (байт)
 COPY_FREE_MARGIN_BYTES = 64 * 1024 * 1024
-
-# Порядок слияния при конфликте тегов с разных кадров (меньший индекс = выигрывает)
-TAG_MERGE_PRIORITY: tuple[str, ...] = (
-    "personal_user_nsfw",
-    "personal_user_sfw",
-    "my_dog",
-    "puppy_play",
-    "explicit_zoo_real_animal",
-    "furry_nsfw_canidae",
-    "furry_nsfw_other",
-    "furry_sfw_canidae",
-    "furry_sfw_other",
-    "human_real_nsfw_male",
-    "human_real_nsfw_female",
-    "human_ai_gen_nsfw_male",
-    "human_ai_gen_nsfw_female",
-    "gay_male_nsfw_solo",
-    "gay_male_nsfw_couple",
-    "vehicles_and_racing",
-    "human_real_sfw",
-    "human_ai_gen_sfw",
-    "real_animals",
-    "memes_and_screenshots",
-    "landscapes_and_objects",
-    "queer_art_sfw",
-    "pride_and_lgbt_events",
-    "tech_desk_setup",
-    "pc_build_and_hardware",
-    "coding_ide_and_terminal",
-    "gaming_ui_screenshots",
-    "gaming_room_setup",
-    "anime_and_manga",
-    "comics_and_superheroes",
-    "board_games_tabletop",
-    "sneakers_and_streetwear",
-    "gym_and_fitness",
-    "car_mods_and_meets",
-    "nightlife_party",
-    "coffee_and_food_aesthetic",
-    "music_festival_live",
-    "travel_urban_explore",
-    "tattoos_and_body_art",
-    "streaming_and_webcam",
-    "sci_fi_collectibles",
-    "uncategorized",
-)
 
 
 class MediaScanMode(str, Enum):
-    """Режим обхода папки: только фото / фото+видео / только видео+GIF."""
+    """Scan mode: photos only / photos+video / video+GIF only."""
 
     PHOTOS_ONLY = "photos_only"
     PHOTOS_AND_VIDEO = "photos_and_video"
     VIDEO_ONLY = "video_only"
 
+
+# ---------------------------------------------------------------------------
+# API / network defaults
+# ---------------------------------------------------------------------------
+
 DEFAULT_API_BASE = (
     os.environ.get("PHOTO_AI_SORTER_API_BASE", "http://127.0.0.1:1234").strip()
     or "http://127.0.0.1:1234"
 )
-# LM Studio usually accepts requests without a real API key. If your OpenAI-compatible
-# server requires one, provide it through the environment instead of committing it.
 DEFAULT_API_KEY = os.environ.get("PHOTO_AI_SORTER_API_KEY", "")
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 MODELS_PATH = "/v1/models"
@@ -389,5 +388,4 @@ LOG_MAX_LINES = 500
 
 ETA_ROLLING_WINDOW = 20
 
-# Повторная попытка классификации файла при API-ошибке или uncategorized.
 CLASSIFY_FILE_MAX_ATTEMPTS = 3

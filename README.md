@@ -10,9 +10,12 @@ The app is designed for private local media libraries that may contain personal 
 
 - Photo, video, and GIF scanning.
 - Local vision classification through any OpenAI-compatible API (LM Studio, Ollama, etc.).
-- Five tag modes:
-  - **Furry** — fixed built-in category list.
-  - **General** — broader preset for geek, IT, car culture, fitness, nightlife, LGBTQ+ galleries.
+- Four search profiles (built-in category presets):
+  - **SFW** — safe-for-work categories only.
+  - **NSFW** — SFW + explicit content categories.
+  - **Furry SFW** — adds furry art categories (SFW only).
+  - **Furry NSFW** — full set including furry NSFW.
+- Three flexible tag modes:
   - **Auto categories** — stabilized model-generated folder names.
   - **Free model tags** — unrestricted hierarchical tags for experiments.
   - **Custom list** — user-defined tag sets with optional recognition descriptions.
@@ -70,7 +73,7 @@ For your LM Studio setup you can also create a local `.env.local` next to `run.b
 It is ignored by git:
 
 ```bash
-PHOTO_AI_SORTER_API_BASE=http://10.77.77.2:29931
+PHOTO_AI_SORTER_API_BASE=http://your-server:port
 PHOTO_AI_SORTER_API_KEY=your-lm-studio-token
 ```
 
@@ -124,13 +127,26 @@ Built-in profile names:
 
 The sorter uses the active profile. Duplicate workflows keep their own model controls, but the profile system is ready for role-specific expansion.
 
+## Search Profiles
+
+The app ships with four built-in search profiles that determine which output categories are available:
+
+| Profile | Content |
+|---------|---------|
+| **SFW** | Generic categories (humans, animals, vehicles, tech, art, etc.) — no NSFW |
+| **NSFW** | SFW + explicit human/AI-generated categories |
+| **Furry SFW** | SFW + furry art SFW categories |
+| **Furry NSFW** | All of the above + furry NSFW |
+
+Select a profile in the GUI's segmented button bar before starting a sort.
+
+## Custom Tag Sets
+
+For personalized presets (e.g., recognizing your pet, specific people, niche categories), use the **Custom list** mode with user-defined tag sets stored locally in `context_tags.json` (gitignored). This way personal recognition context never leaves your machine or enters the repository.
+
 ## Sorting Modes
 
-`Furry` is the safest original preset for large libraries because it only writes the original known folders.
-
-`General` is the recommended fixed preset for mixed personal libraries. It keeps all `Furry` tags and adds broader buckets for geek, IT, car, fitness, nightlife, and LGBTQ+ content without allowing arbitrary folder creation.
-
-`Auto categories` is intended for mixed libraries where you want new folders. It normalizes model output so near-duplicates such as `car`, `cars`, `vehicle`, and `auto` do not create separate folder trees.
+`Auto categories` normalizes model output so near-duplicates such as `car`, `cars`, `vehicle`, and `auto` do not create separate folder trees.
 
 `Free model tags` is intentionally free-form and can create many folders. Use it for small test batches or exploration.
 
@@ -147,8 +163,8 @@ Each line includes the source path, SHA-256, category, candidates, confidence, s
 ## Resuming Large Runs
 
 Sorting progress is saved into the local SQLite app data database. If a run is
-stopped or the PC shuts down, reopen the app and use `Продолжить сессию`, or
-start the same input/output/mode again and choose `Да` when prompted.
+stopped or the PC shuts down, reopen the app and start the same input/output/mode
+again and choose `Да` when prompted.
 
 The resume path stores per-file path, size, mtime, SHA-256, category, and session
 status locally. API keys are not written into session records.
@@ -178,7 +194,9 @@ python -m pytest -q
 
 The repository normalizes text files through `.gitattributes` and `.editorconfig` to keep diffs readable.
 
-Before publishing a release, use [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+## Contributing
+
+Contributions are welcome. Please open an issue first for large changes.
 
 ## License
 

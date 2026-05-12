@@ -11,11 +11,10 @@ Photo AI Sorter talks to LM Studio through the OpenAI-compatible API.
 - If auth is required, set `PHOTO_AI_SORTER_API_KEY` in the environment before launching the app.
 - Optional defaults can be overridden with `PHOTO_AI_SORTER_API_BASE` and `PHOTO_AI_SORTER_MODEL`.
 
-Your current LM Studio Developer screen shows `Require Authentication` enabled and
-the server reachable at `http://10.77.77.2:29931`. For that setup use:
+If your LM Studio server uses authentication and runs on a different host, use:
 
 ```bash
-PHOTO_AI_SORTER_API_BASE=http://10.77.77.2:29931
+PHOTO_AI_SORTER_API_BASE=http://your-server:port
 PHOTO_AI_SORTER_API_KEY=your-lm-studio-token
 ```
 

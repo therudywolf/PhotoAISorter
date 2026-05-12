@@ -31,8 +31,8 @@ def test_parse_general_preset_tag() -> None:
     assert result.needs_review is False
 
 
-def test_parse_strict_rejects_general_only_tag() -> None:
-    result = parse_classification_result("coding_ide_and_terminal", mode="strict")
+def test_parse_strict_rejects_nsfw_tag() -> None:
+    result = parse_classification_result("furry_nsfw_canidae", mode="strict")
     assert result.category == UNCATEGORIZED
     assert result.needs_review is True
 
