@@ -1,4 +1,7 @@
-﻿"""Duplicates finder tab: simple strictness UI, staged progress, resume support."""
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+"""Duplicates finder tab: simple strictness UI, staged progress, resume support."""
 
 from __future__ import annotations
 
@@ -1799,6 +1802,9 @@ class DuplicatesPane(ctk.CTkFrame):
     def on_app_close(self) -> None:
         if self._dup_worker:
             self._dup_worker.request_stop()
+            thread = getattr(self._dup_worker, "_thread", None)
+            if thread is not None:
+                thread.join(timeout=5.0)
         self.flush_persist_review_state()
         vw = self._viewer_window
         if vw is not None:
@@ -1806,4 +1812,7 @@ class DuplicatesPane(ctk.CTkFrame):
                 vw.destroy()
             except Exception:
                 pass
-        self._sig_db.close()
+        try:
+            self._sig_db.close()
+        except Exception:
+            pass

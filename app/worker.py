@@ -1,4 +1,7 @@
-﻿"""Background worker: scan, classify via API, copy files, update DB."""
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+"""Background worker: scan, classify via API, copy files, update DB."""
 
 from __future__ import annotations
 
@@ -57,6 +60,11 @@ def iter_media_files(root: Path, mode: MediaScanMode) -> list[Path]:
         return out
     for p in root.rglob("*"):
         if not p.is_file():
+            continue
+        try:
+            resolved = p.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
             continue
         suf = p.suffix.lower()
         if mode == MediaScanMode.PHOTOS_ONLY:
@@ -259,6 +267,7 @@ class SortWorker:
             "needs_review": 0,
             "review_written": 0,
         }
+        metrics_lock = threading.Lock()
         try:
             self._emit({"type": "state_changed", "state": TaskState.RUNNING.value})
             source_dir = source_dir.resolve()
@@ -493,38 +502,37 @@ class SortWorker:
                 return ClassificationResult(UNCATEGORIZED, [], 0.0, reason, True, raw_text)
 
             def _emit_health(last_api_sec: float | None = None) -> None:
-                avg = (
-                    metrics["api_latency_sec"] / metrics["api_calls"]
-                    if metrics["api_calls"] > 0
-                    else 0.0
-                )
-                self._emit(
-                    {
-                        "type": "health",
-                        "payload": {
-                            "model": self.model,
-                            "api_calls": metrics["api_calls"],
-                            "avg_api_sec": round(avg, 2),
-                            "last_api_sec": round(last_api_sec or 0.0, 2),
-                            "api_errors": metrics["api_errors"],
-                            "api_workers": self.api_workers,
-                            "needs_review": metrics["needs_review"],
-                            "review_written": metrics["review_written"],
-                        },
+                with metrics_lock:
+                    avg = (
+                        metrics["api_latency_sec"] / metrics["api_calls"]
+                        if metrics["api_calls"] > 0
+                        else 0.0
+                    )
+                    payload = {
+                        "model": self.model,
+                        "api_calls": metrics["api_calls"],
+                        "avg_api_sec": round(avg, 2),
+                        "last_api_sec": round(last_api_sec or 0.0, 2),
+                        "api_errors": metrics["api_errors"],
+                        "api_workers": self.api_workers,
+                        "needs_review": metrics["needs_review"],
+                        "review_written": metrics["review_written"],
                     }
-                )
+                self._emit({"type": "health", "payload": payload})
 
             def _timed_api_call(fn: Callable[[], str]) -> str:
                 api_t0 = time.monotonic()
                 raw = _run_api_call(fn)
                 api_sec = time.monotonic() - api_t0
-                metrics["api_calls"] += 1
-                metrics["api_latency_sec"] += api_sec
+                with metrics_lock:
+                    metrics["api_calls"] += 1
+                    metrics["api_latency_sec"] += api_sec
                 _emit_health(api_sec)
                 return raw
 
             def _handle_video_fallback_error(path: Path, label: str, exc: Exception) -> None:
-                metrics["api_errors"] += 1
+                with metrics_lock:
+                    metrics["api_errors"] += 1
                 _register_api_error(exc)
                 self._emit({"type": "log", "text": f"video classify fallback {path.name}: {label}: {exc!s}"})
 
@@ -666,7 +674,8 @@ class SortWorker:
                         "raw_model_output": result.raw_text[:4000],
                     }
                 )
-                metrics["review_written"] += 1
+                with metrics_lock:
+                    metrics["review_written"] += 1
 
             def process_one(path: Path) -> None:
                 if self._stop.is_set():
@@ -693,7 +702,8 @@ class SortWorker:
                     mtime_ns=mtime_ns,
                     size_bytes=size_bytes,
                 ) == "done":
-                    metrics["cache_skip"] += 1
+                    with metrics_lock:
+                        metrics["cache_skip"] += 1
                     self._emit({"type": "log", "text": f"resume skip: {path}"})
                     complete_task(time.monotonic() - t0)
                     return
@@ -707,7 +717,8 @@ class SortWorker:
 
                 skip = self.db.upsert_file_record(digest, str(path), PIPELINE_VERSION)
                 if skip == "skip":
-                    metrics["cache_skip"] += 1
+                    with metrics_lock:
+                        metrics["cache_skip"] += 1
                     self.db.mark_sort_session_item(
                         session_key,
                         path_norm,
@@ -794,7 +805,8 @@ class SortWorker:
                                 category = normalize_tag(raw, whitelist=wl)
                                 result = ClassificationResult(category, [category], 0.75, "legacy_tag_output", category == UNCATEGORIZED, raw)
                     except Exception as e:
-                        metrics["api_errors"] += 1
+                        with metrics_lock:
+                            metrics["api_errors"] += 1
                         _register_api_error(e)
                         self._emit(
                             {
@@ -841,7 +853,8 @@ class SortWorker:
                     complete_task(time.monotonic() - t0)
                     return
                 if result.needs_review:
-                    metrics["needs_review"] += 1
+                    with metrics_lock:
+                        metrics["needs_review"] += 1
 
                 tag_dir = dest_dir / category
                 if self.review_first:
@@ -865,7 +878,8 @@ class SortWorker:
                     return
                 try:
                     if not has_disk_space_for_copy(dest_dir, path):
-                        metrics["no_space"] += 1
+                        with metrics_lock:
+                            metrics["no_space"] += 1
                         self._emit(
                             {
                                 "type": "log",
@@ -889,11 +903,13 @@ class SortWorker:
                             sha256=digest,
                             category=category,
                         )
-                        metrics["copied"] += 1
+                        with metrics_lock:
+                            metrics["copied"] += 1
                         _record_review(path, digest, result, copied_to=str(dest_file))
                         self._emit({"type": "log", "text": f"{path.name} -> {category}"})
                 except OSError as e:
-                    metrics["copy_errors"] += 1
+                    with metrics_lock:
+                        metrics["copy_errors"] += 1
                     self._emit(
                         {
                             "type": "log",
@@ -1004,7 +1020,6 @@ class SortWorker:
             finally:
                 if on_complete:
                     on_complete()
-                self._run_id = None
 
         self._thread = threading.Thread(target=target, daemon=True)
         self._thread.start()

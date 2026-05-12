@@ -1,4 +1,7 @@
-﻿"""CustomTkinter main window."""
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+"""CustomTkinter main window."""
 
 from __future__ import annotations
 
@@ -6,6 +9,7 @@ import queue
 import threading
 import tkinter.filedialog as filedialog
 import tkinter.messagebox as messagebox
+import webbrowser
 from pathlib import Path
 
 import customtkinter as ctk
@@ -221,6 +225,22 @@ class App(ctk.CTk):
 
     def _build(self) -> None:
         pad = {"padx": 12, "pady": 6}
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=12, pady=(10, 0))
+        ctk.CTkLabel(
+            header,
+            text="Photo AI Sorter",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w",
+        ).pack(side="left")
+        ctk.CTkButton(
+            header,
+            text="About / License",
+            width=140,
+            fg_color=("gray75", "gray30"),
+            command=self._show_about_dialog,
+        ).pack(side="right")
 
         self._tabs = ctk.CTkTabview(self)
         self._tabs.pack(fill="both", expand=True, padx=0, pady=0)
@@ -487,6 +507,37 @@ class App(ctk.CTk):
         dup_scroll.pack(fill="both", expand=True)
         self._dup_pane = DuplicatesPane(dup_scroll, self)
         self._dup_pane.pack(fill="both", expand=True, padx=4, pady=4)
+
+    def _show_about_dialog(self) -> None:
+        win = ctk.CTkToplevel(self)
+        win.title("About / License")
+        win.geometry("620x430")
+        win.transient(self)
+        text = (
+            "Photo AI Sorter\n\n"
+            "Copyright (C) 2026 Photo AI Sorter contributors.\n\n"
+            "License: GNU Affero General Public License v3.0 only.\n\n"
+            "This program is free software: you can redistribute it and/or modify it under "
+            "the terms of the GNU Affero General Public License as published by the Free "
+            "Software Foundation, version 3.\n\n"
+            "This program is distributed WITHOUT ANY WARRANTY; without even the implied "
+            "warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+            "Source code: https://github.com/therudywolf/PhotoAISorter\n"
+            "Full license text is included in the LICENSE file."
+        )
+        tb = ctk.CTkTextbox(win, font=ctk.CTkFont(size=13), wrap="word")
+        tb.pack(fill="both", expand=True, padx=12, pady=(12, 8))
+        tb.insert("1.0", text)
+        tb.configure(state="disabled")
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(
+            row,
+            text="Open Source",
+            width=130,
+            command=lambda: webbrowser.open("https://github.com/therudywolf/PhotoAISorter"),
+        ).pack(side="left")
+        ctk.CTkButton(row, text=t("buttons.close"), width=120, command=win.destroy).pack(side="right")
 
     def _on_media_mode_label_change(self, label: str) -> None:
         value = _MEDIA_MODE_VALUES.get(label)
@@ -1272,8 +1323,10 @@ class App(ctk.CTk):
         else:
             self._sig_db.close()
         self._save_gui_settings()
-        if not any(w.is_alive() for w in workers):
+        try:
             self._db.close()
+        except Exception:
+            pass
         self.destroy()
 
 

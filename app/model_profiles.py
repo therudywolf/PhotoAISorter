@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
 """LM Studio model profiles and lightweight benchmark helpers."""
 
 from __future__ import annotations

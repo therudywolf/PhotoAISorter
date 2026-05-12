@@ -1,4 +1,7 @@
-﻿from pathlib import Path
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+from pathlib import Path
 
 from app.constants import PIPELINE_VERSION
 from app.db import Database, make_sort_session_key

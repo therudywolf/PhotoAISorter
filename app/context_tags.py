@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
 """User-defined tag sets for AI classification.
 
 A TagSet is a named collection of tags. Each tag has:

@@ -1,6 +1,7 @@
 # Virtual environments
 .venv/
 .venv-linux/
+.venv*/
 
 # Python bytecode
 __pycache__/
@@ -35,9 +36,10 @@ dist/
 .env.*
 !.env.example
 
-# IDE
+# IDE / editors
 .vscode/
 .idea/
+.cursor/
 *.swp
 *~
 

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photo-ai-sorter"
+version = "0.1.0"
+description = "Local desktop tool for sorting photo and video libraries with a vision model."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-only"
+authors = [
+  { name = "Photo AI Sorter contributors" }
+]
+dependencies = [
+  "customtkinter>=5.2.0",
+  "Pillow>=10.0.0",
+  "requests>=2.31.0",
+  "pillow-heif>=0.16.0",
+  "opencv-python-headless>=4.8.0",
+  "ImageHash>=4.3.1",
+  "numpy>=1.26.0",
+  "send2trash>=1.8.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/therudywolf/PhotoAISorter"
+Source = "https://github.com/therudywolf/PhotoAISorter"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

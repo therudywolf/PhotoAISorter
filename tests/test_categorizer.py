@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
 """Unit tests for tag normalization and merge."""
 
 from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_auto, normalize_tag_free

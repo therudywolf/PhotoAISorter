@@ -1,4 +1,7 @@
-﻿"""Application constants: categories, search profiles, API defaults, image limits."""
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+"""Application constants: categories, search profiles, API defaults, image limits."""
 
 from __future__ import annotations
 

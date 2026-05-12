@@ -4,7 +4,7 @@
 
 Local desktop tool for sorting mixed photo/video libraries with a vision model, finding duplicates, and reviewing risky cleanup decisions before deleting files.
 
-The app is designed for private local media libraries that may contain personal photos, screenshots, generated images, downloaded archives, memes, videos, GIFs, and duplicates. All processing happens locally — no data leaves your machine.
+The app is designed for private local media libraries that may contain personal photos, screenshots, generated images, downloaded archives, memes, videos, GIFs, and duplicates. Processing stays on your machine when the configured OpenAI-compatible API server is local. If you point the app at a remote API server, selected images or video frames are sent to that server for classification.
 
 ## Features
 
@@ -34,6 +34,8 @@ The app is designed for private local media libraries that may contain personal 
 - FFmpeg/OpenCV video frame extraction fallback.
 
 ## Quick Start on Windows
+
+Requirements: Python 3.10 or newer. Python 3.11 is used by the Docker test image.
 
 Double-click:
 
@@ -82,6 +84,8 @@ directory, not inside the repository.
 
 ## Manual Setup
 
+Runtime dependencies are in `requirements.txt`. Test/development dependencies are in `requirements-dev.txt`.
+
 ```bash
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
@@ -113,6 +117,15 @@ Recommended model characteristics:
 For LM Studio stability, keep LM-request concurrency at 1 (the default). The app prepares/hashes/copies files in parallel while serializing calls to the local model.
 
 More setup notes are in [docs/LM_STUDIO.md](docs/LM_STUDIO.md).
+
+## Docker Test Image
+
+The Dockerfile is for repeatable compile/test checks, not for running the desktop GUI:
+
+```bash
+docker build -t photo-ai-sorter:test .
+docker run --rm photo-ai-sorter:test
+```
 
 ## Model Profiles
 
@@ -188,6 +201,7 @@ See [examples/category_aliases.example.json](examples/category_aliases.example.j
 ## Development Checks
 
 ```bash
+python -m pip install -r requirements-dev.txt
 python -m compileall -q app tests main.py
 python -m pytest -q
 ```
@@ -196,10 +210,14 @@ The repository normalizes text files through `.gitattributes` and `.editorconfig
 
 ## Contributing
 
-Contributions are welcome. Please open an issue first for large changes.
+Contributions are welcome. Please open an issue first for large changes and read [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Report security issues using [SECURITY.md](SECURITY.md). Third-party dependency notes are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 
 This project is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+
+Copyright (C) 2026 Photo AI Sorter contributors.
 
 In short: you may use, modify, and distribute this software freely, but any modified version that is accessible over a network must also share its source code under the same license.

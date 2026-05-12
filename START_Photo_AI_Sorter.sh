@@ -135,6 +135,14 @@ else
     echo "      Зависимости уже актуальны."
 fi
 
+if [ "$LAUNCH_MODE" = "test" ]; then
+    "$PY" -m pip install -r requirements-dev.txt --upgrade -q --disable-pip-version-check || {
+        echo "[ОШИБКА] pip install dev-зависимостей завершился с ошибкой."
+        "$PY" -m pip install -r requirements-dev.txt --upgrade --disable-pip-version-check
+        fail
+    }
+fi
+
 echo "[3/3] Проверка окружения ..."
 if ! "$PY" -c "import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)"; then
     echo "[ОШИБКА] Нужен Python 3.10+. Удалите $VENV_DIR и запустите скрипт снова."
@@ -160,6 +168,9 @@ if ! "$PY" -c "import app.gui; import app.gui_duplicates; import app.duplicate_f
         echo "      Установка зависимостей ..."
         "$PY" -m pip install --upgrade pip setuptools wheel -q --disable-pip-version-check
         "$PY" -m pip install -r requirements.txt --upgrade -q --disable-pip-version-check
+        if [ "$LAUNCH_MODE" = "test" ]; then
+            "$PY" -m pip install -r requirements-dev.txt --upgrade -q --disable-pip-version-check
+        fi
         "$PY" -c "from pathlib import Path; Path('$VENV_DIR/.photo_ai_sorter_deps_ok').write_text('ok', encoding='utf-8')"
         if ! "$PY" -c "import app.gui; import app.gui_duplicates; import app.duplicate_finder; import app.duplicate_worker; import app.signature_db; import app.worker; import app.lm_studio; import app.settings_store; import app.video_frames; print('Проверка импорта: OK')"; then
             echo "[ОШИБКА] Не удалось импортировать приложение."

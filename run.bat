@@ -104,6 +104,11 @@ if "%NEED_INSTALL%"=="1" (
     echo       Зависимости уже актуальны.
 )
 
+if /i "%~1"=="test" (
+    "%PY%" -m pip install -r requirements-dev.txt --upgrade -q --disable-pip-version-check
+    if errorlevel 1 goto :pip_fail_dev
+)
+
 echo [3/3] Проверка окружения ...
 "%PY%" -c "import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)"
 if errorlevel 1 (
@@ -177,6 +182,14 @@ echo [ОШИБКА] pip install завершился с ошибкой.
 echo Диагностика: повтор без -q, вывод ниже.
 echo.
 "%PY%" -m pip install -r requirements.txt --upgrade --disable-pip-version-check
+goto :fail
+
+:pip_fail_dev
+echo.
+echo [ОШИБКА] pip install dev-зависимостей завершился с ошибкой.
+echo Диагностика: повтор без -q, вывод ниже.
+echo.
+"%PY%" -m pip install -r requirements-dev.txt --upgrade --disable-pip-version-check
 goto :fail
 
 :help

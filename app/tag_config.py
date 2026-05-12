@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
 """Unified tag configuration: TagMode enum, SearchProfile, ResolvedTagConfig, and resolution logic.
 
 This module is the single source of truth for how tag modes map to

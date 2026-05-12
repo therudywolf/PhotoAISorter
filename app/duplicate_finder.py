@@ -1,4 +1,7 @@
-﻿"""Simplified duplicate detection: exact + perceptual + optional LLM stage."""
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+"""Simplified duplicate detection: exact + perceptual + optional LLM stage."""
 
 from __future__ import annotations
 

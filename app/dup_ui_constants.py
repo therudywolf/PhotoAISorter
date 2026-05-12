@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
 """Общие цвета CustomTkinter для вкладки дубликатов и окна просмотра групп."""
 
 # Акцентные кнопки (например «Вперёд», «Открыть окно просмотра»)

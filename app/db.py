@@ -1,4 +1,7 @@
-﻿"""SQLite persistence for file hashes and processing state."""
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+"""SQLite persistence for file hashes and processing state."""
 
 from __future__ import annotations
 

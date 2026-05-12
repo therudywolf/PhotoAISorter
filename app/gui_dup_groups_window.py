@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
 """Отдельное окно: крупный просмотр групп дубликатов, утверждение и удаление всей группы."""
 
 from __future__ import annotations

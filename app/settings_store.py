@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
 """Persist GUI fields next to the app data directory (JSON)."""
 
 from __future__ import annotations

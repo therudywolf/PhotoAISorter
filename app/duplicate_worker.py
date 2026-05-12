@@ -1,4 +1,7 @@
-﻿"""Background worker: scan folder, compute signatures, emit duplicate groups with staged progress."""
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+"""Background worker: scan folder, compute signatures, emit duplicate groups with staged progress."""
 
 from __future__ import annotations
 
@@ -348,10 +351,7 @@ class DuplicateFinderWorker:
         self._run_id = uuid.uuid4().hex
 
         def target() -> None:
-            try:
-                self.run_scan(root, options, media_mode=media_mode, force_recompute=force_recompute, resume=resume)
-            finally:
-                self._run_id = None
+            self.run_scan(root, options, media_mode=media_mode, force_recompute=force_recompute, resume=resume)
 
         self._thread = threading.Thread(target=target, daemon=True)
         self._thread.start()

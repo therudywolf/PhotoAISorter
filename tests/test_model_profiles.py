@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
 """Model profile persistence helpers."""
 
 from app.model_profiles import merge_profiles, profiles_to_settings
