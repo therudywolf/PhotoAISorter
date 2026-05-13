@@ -1,8 +1,23 @@
-# Photo AI Sorter
+# 🐺 Photo AI Sorter
+
+> `D34D1N$1D3` :: dead inside wolf :: local media sorting with vision models
+
+My resources:
+- [Gravatar](https://gravatar.com/therudywolf)
+- [OneToThree](https://onetothree.ru)
+- [Forest blog](https://t.me/theforestserver)
+- [X](https://x.com/therudywolf)
+- [GitHub](https://github.com/therudywolf)
+- [Twitch](https://twitch.tv/therudywolf)
+- [Reddit](https://reddit.com/user/Most-Watercress-6718)
+- [Telegram](https://t.me/rudy_wolf)
+- [YouTube](https://youtube.com/channel/UCXHkoSlaY5QaNmN_l4t0djQ)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 Local desktop tool for sorting mixed photo/video libraries with a vision model, finding duplicates, and reviewing risky cleanup decisions before deleting files.
+
+AGPL v3 Copyleft applies to reuse, modification, and network deployment of derived versions.
 
 The app is designed for private local media libraries that may contain personal photos, screenshots, generated images, downloaded archives, memes, videos, GIFs, and duplicates. Processing stays on your machine when the configured OpenAI-compatible API server is local. If you point the app at a remote API server, selected images or video frames are sent to that server for classification.
 
