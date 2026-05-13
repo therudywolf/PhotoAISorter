@@ -20,6 +20,7 @@ from app.constants import DEFAULT_API_BASE, DEFAULT_MODEL, MediaScanMode, VIDEO_
 from app.duplicate_finder import (
     DuplicateFinderOptions,
     load_records_from_db,
+    max_duplicate_workers,
     merge_options_from_dict,
     options_from_preset,
     options_to_dict,
@@ -55,6 +56,26 @@ def _dup_stage_label(stage: str) -> str:
         "done": ui_t("dup.stage.done"),
         "start": ui_t("dup.stage.start"),
     }.get(stage, ui_t("dup.stage.generic", name=stage))
+
+
+def _dup_stage_short(stage: str) -> str:
+    return {
+        "scan_signatures": ui_t("dup.stage.short.scan"),
+        "grouping": ui_t("dup.stage.short.grouping"),
+        "llm_verify": ui_t("dup.stage.short.llm"),
+        "done": ui_t("dup.stage.short.done"),
+        "start": ui_t("dup.stage.short.start"),
+    }.get(stage, str(stage or "—"))
+
+
+def _format_eta(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{int(round(seconds))} с"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes} мин"
+    return f"{minutes // 60} ч {minutes % 60:02d} мин"
 
 
 FILTER_TYPE_KEY_TO_LABEL = {
@@ -97,6 +118,8 @@ class DuplicatesPane(ctk.CTkFrame):
         self._dup_worker: DuplicateFinderWorker | None = None
         self._running = False
         self._current_run_id: str | None = None
+        self._scan_started_at: float | None = None
+        self._scan_had_groups_ready = False
 
         self._dir_var = ctk.StringVar(value="")
         self._preset_var = ctk.StringVar(value="balanced")
@@ -265,6 +288,16 @@ class DuplicatesPane(ctk.CTkFrame):
         self._btn_stop.pack(side="left", padx=(0, 8))
         self._btn_regroup = ctk.CTkButton(row_b, text=ui_t("dup.regroup"), command=self._on_regroup)
         self._btn_regroup.pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(row_b, text=ui_t("dup.workers"), width=64, anchor="e").pack(side="left", padx=(8, 4))
+        worker_values = [str(i) for i in range(1, max_duplicate_workers() + 1)]
+        self._workers_combo = ctk.CTkComboBox(
+            row_b,
+            values=worker_values,
+            variable=self._workers_var,
+            width=76,
+            state="readonly",
+        )
+        self._workers_combo.pack(side="left")
 
         self._btn_advanced_toggle = ctk.CTkButton(
             top,
@@ -278,8 +311,6 @@ class DuplicatesPane(ctk.CTkFrame):
         row_adv1 = ctk.CTkFrame(self._frm_advanced, fg_color="transparent")
         row_adv1.pack(fill="x", padx=8, pady=6)
         ctk.CTkCheckBox(row_adv1, text=ui_t("dup.force_recompute"), variable=self._force_recompute_var).pack(side="left", padx=(0, 12))
-        ctk.CTkLabel(row_adv1, text=ui_t("dup.workers"), width=72, anchor="w").pack(side="left", padx=(8, 4))
-        ctk.CTkComboBox(row_adv1, values=["1", "2", "3", "4"], variable=self._workers_var, width=70, state="readonly").pack(side="left", padx=(0, 10))
         ctk.CTkLabel(
             row_adv1,
             text=ui_t("dup.workers.hint"),
@@ -420,6 +451,14 @@ class DuplicatesPane(ctk.CTkFrame):
         self._prog.set(0)
         self._prog_label = ctk.CTkLabel(self, text=ui_t("dup.stage.done"))
         self._prog_label.pack(anchor="w", padx=12)
+        self._current_file_label = ctk.CTkLabel(
+            self,
+            text="",
+            text_color=("gray38", "gray62"),
+            font=ctk.CTkFont(size=11),
+            anchor="w",
+        )
+        self._current_file_label.pack(anchor="w", padx=12)
 
         viewer_box = ctk.CTkFrame(self, fg_color=("gray88", "gray18"), corner_radius=12)
         viewer_box.pack(fill="both", expand=True, padx=12, pady=(10, 12))
@@ -615,9 +654,9 @@ class DuplicatesPane(ctk.CTkFrame):
         key = self._preset_key_from_combo()
         base = options_from_preset(key)
         try:
-            workers = max(1, min(4, int(self._workers_var.get().strip())))
+            workers = max(1, min(max_duplicate_workers(), int(self._workers_var.get().strip())))
         except ValueError:
-            messagebox.showerror("Параметры", "Воркеры должны быть числом от 1 до 4")
+            messagebox.showerror("Параметры", f"Воркеры должны быть числом от 1 до {max_duplicate_workers()}")
             return None
         base.parallel_workers = workers
         base.keep_policy = self._keep_var.get()  # type: ignore[assignment]
@@ -736,7 +775,7 @@ class DuplicatesPane(ctk.CTkFrame):
             self._preset_combo.set(labels[keys.index(preset)])
         base = options_from_preset(preset)
         merged = merge_options_from_dict(dup, base)
-        self._workers_var.set(str(max(1, min(4, int(merged.parallel_workers)))))
+        self._workers_var.set(str(max(1, min(max_duplicate_workers(), int(merged.parallel_workers)))))
         self._keep_var.set(str(merged.keep_policy))
         self._force_recompute_var.set(bool(dup.get("force_recompute", False)))
         self._llm_var.set(bool(dup.get("llm_enabled", merged.use_llm_pairs)))
@@ -808,12 +847,15 @@ class DuplicatesPane(ctk.CTkFrame):
         self._session_key = make_session_key(str(root.resolve()), mode.value, opts.strictness)
 
         self._running = True
+        self._scan_started_at = time.monotonic()
+        self._scan_had_groups_ready = False
         self._btn_scan.configure(state="disabled")
         self._btn_pause.configure(state="normal", text="Пауза")
         self._btn_stop.configure(state="normal")
         self._prog.set(0)
         self._stage_label.configure(text=ui_t("dup.stage.start"))
         self._prog_label.configure(text=ui_t("dup.stage.scan"))
+        self._current_file_label.configure(text="")
         self._clear_groups_ui()
         self._app._save_gui_settings()
         self._update_dup_llm_buttons_state()
@@ -894,7 +936,21 @@ class DuplicatesPane(ctk.CTkFrame):
         elif msg_type == "dup_progress":
             done = int(msg.get("done", 0))
             total = int(msg.get("total", 1))
-            self._prog_label.configure(text=ui_t("dup.progress.files", done=done, total=total))
+            elapsed = max(0.001, time.monotonic() - (self._scan_started_at or time.monotonic()))
+            speed = done / elapsed if done > 0 else 0.0
+            eta = ((total - done) / speed) if speed > 0 and total > done else 0.0
+            self._prog_label.configure(
+                text=ui_t(
+                    "dup.progress.files_rate",
+                    done=done,
+                    total=total,
+                    rate=f"{speed:.1f}",
+                    eta=_format_eta(eta),
+                )
+            )
+            p = str(msg.get("path", "") or "")
+            if p:
+                self._current_file_label.configure(text=ui_t("dup.progress.current", name=Path(p).name))
             if total > 0:
                 self._prog.set(min(1.0, done / float(total)))
         elif msg_type == "dup_stage":
@@ -907,10 +963,11 @@ class DuplicatesPane(ctk.CTkFrame):
             if total > 0:
                 self._prog.set(min(1.0, done / float(total)))
             self._prog_label.configure(
-                text=ui_t("dup.progress.stage_detail", stage=_dup_stage_label(st), done=done, total=total)
+                text=ui_t("dup.progress.stage_detail", stage=_dup_stage_short(st), done=done, total=total)
             )
         elif msg_type == "dup_groups_ready":
             self._last_records_meta = list(msg.get("records") or [])
+            self._scan_had_groups_ready = True
             self._ingest_groups(list(msg.get("groups") or []))
         elif msg_type == "dup_finished":
             self._running = False
@@ -919,6 +976,7 @@ class DuplicatesPane(ctk.CTkFrame):
             self._btn_pause.configure(state="disabled", text=ui_t("buttons.pause"))
             self._btn_stop.configure(state="disabled")
             self._stage_label.configure(text=ui_t("dup.stage.done"))
+            self._current_file_label.configure(text="")
             reason = str(msg.get("reason", ""))
             if self._last_scan_summary and reason == "completed" and self._group_records:
                 ndel = len(self._collect_delete_paths())
@@ -930,6 +988,8 @@ class DuplicatesPane(ctk.CTkFrame):
                         to_delete=ndel,
                     )
                 )
+            elif self._scan_had_groups_ready and reason == "completed":
+                self._prog_label.configure(text=ui_t("dup.finished.none"))
             else:
                 self._prog_label.configure(text=ui_t("dup.finished.with_reason", done=ui_t("dup.stage.done"), reason=reason))
             self._update_dup_llm_buttons_state()
@@ -1779,7 +1839,7 @@ class DuplicatesPane(ctk.CTkFrame):
         mm = str(prof.get("media_mode", ""))
         if mm in {m.value for m in MediaScanMode}:
             self._media_mode_var.set(mm)
-        self._workers_var.set(str(max(1, min(4, int(prof.get("parallel_workers", 3) or 3)))))
+        self._workers_var.set(str(max(1, min(max_duplicate_workers(), int(prof.get("parallel_workers", 3) or 3)))))
         self._force_recompute_var.set(bool(prof.get("force_recompute", False)))
         self._llm_var.set(bool(prof.get("llm_enabled", False)))
         preset = str(prof.get("preset", "") or "")

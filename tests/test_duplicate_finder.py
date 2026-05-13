@@ -54,6 +54,34 @@ def test_exact_duplicate_group(tmp_path: Path) -> None:
     assert groups[0].is_exact is True
 
 
+def test_exact_only_signature_does_not_decode_visual_hashes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    a = tmp_path / "a.bin"
+    b = tmp_path / "b.bin"
+    payload = b"same exact bytes" * 64
+    a.write_bytes(payload)
+    b.write_bytes(payload)
+
+    def fail_decode(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("exact-only scan must not decode image or video frames")
+
+    monkeypatch.setattr("app.duplicate_finder._load_frames_for_signature", fail_decode)
+
+    db = SignatureDatabase(tmp_path / "exact.sqlite3")
+    opts = DuplicateFinderOptions(include_exact=True, include_perceptual=False, include_semantic=False, use_llm_pairs=False)
+
+    ra = compute_one_signature(a, db, opts, force_recompute=True, on_log=lambda _m: None)
+    rb = compute_one_signature(b, db, opts, force_recompute=True, on_log=lambda _m: None)
+
+    assert ra is not None and rb is not None
+    assert ra.sha256 == rb.sha256
+    assert ra.phash is None and rb.phash is None
+    assert build_groups_from_records([ra, rb], opts)[0].is_exact is True
+
+    cached = load_records_from_db([a, b], db, opts)
+    assert len(cached) == 2
+    assert {r.sha256 for r in cached} == {ra.sha256}
+
+
 def test_perceptual_similar_group(tmp_path: Path) -> None:
     a = tmp_path / "a.jpg"
     b = tmp_path / "b.jpg"

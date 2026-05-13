@@ -33,6 +33,17 @@ The app is designed for private local media libraries that may contain personal 
 - Duplicate review UI with keep/delete selection and safer deletion flow.
 - FFmpeg/OpenCV video frame extraction fallback.
 
+## Performance Notes
+
+Duplicate search has several modes with different costs:
+
+- `Only exact copies` first groups files by byte size, skips unique-size files, and hashes only possible exact-copy candidates. It does not decode images or video frames.
+- `Balanced` and stricter modes compute visual signatures. Video and animated GIF files need representative frames, so installing FFmpeg usually improves speed and reliability.
+- The duplicate tab exposes local scan workers next to the scan button. More workers can help on SSDs and multi-core CPUs, but very large videos can still become disk-bound.
+- Optional LLM verification is intentionally slower because it sends ambiguous pairs to the selected vision model.
+
+For large video libraries, start with `Only exact copies`, then run `Balanced` only on folders where near-duplicates matter.
+
 ## Quick Start on Windows
 
 Requirements: Python 3.10 or newer. Python 3.11 is used by the Docker test image.
@@ -126,6 +137,18 @@ The Dockerfile is for repeatable compile/test checks, not for running the deskto
 docker build -t photo-ai-sorter:test .
 docker run --rm photo-ai-sorter:test
 ```
+
+## Release Hygiene
+
+Publish from git, not by zipping the whole working directory. Local files such as `.env.local`, `local_presets.json`, `.venv`, `ffmpeg-runtime`, SQLite caches, review runs, and duplicate journals are intentionally ignored and can contain private data or bundled binaries.
+
+For a clean source archive:
+
+```bash
+git archive --format=zip --output photo-ai-sorter-source.zip HEAD
+```
+
+Before pushing a release branch, run the checks in [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
 
 ## Model Profiles
 

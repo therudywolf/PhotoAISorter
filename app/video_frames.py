@@ -9,6 +9,7 @@ import io
 import os
 import shutil
 import subprocess
+import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
@@ -44,6 +45,7 @@ def _subprocess_run_common_kw() -> dict[str, object]:
 
 _FRAME_CACHE: OrderedDict[tuple[str, int, int, int], list[Image.Image]] = OrderedDict()
 _FRAME_CACHE_LIMIT = 96
+_FRAME_CACHE_LOCK = threading.Lock()
 
 
 def _noop_log(_msg: str) -> None:
@@ -238,7 +240,9 @@ def _ffmpeg_frame_at(path: Path, t_sec: float, ffmpeg: str) -> Image.Image | Non
         "-f",
         "image2pipe",
         "-vcodec",
-        "png",
+        "mjpeg",
+        "-q:v",
+        "4",
         "-",
     ]
     try:
@@ -417,16 +421,17 @@ def extract_frames_reduced(
 ) -> list[Image.Image]:
     """Try n, then n-1 ... 1 until at least one frame or empty."""
     key = _frame_cache_key(path, int(max(1, n)))
-    cached = _FRAME_CACHE.get(key)
-    if cached is not None:
-        _FRAME_CACHE.move_to_end(key)
-        return [im.copy() for im in cached]
-    for k in range(n, 0, -1):
-        frames = extract_frames_for_classification(path, k, on_log=on_log)
-        if frames:
+    with _FRAME_CACHE_LOCK:
+        cached = _FRAME_CACHE.get(key)
+        if cached is not None:
+            _FRAME_CACHE.move_to_end(key)
+            return [im.copy() for im in cached]
+    frames = extract_frames_for_classification(path, n, on_log=on_log)
+    if frames:
+        with _FRAME_CACHE_LOCK:
             _FRAME_CACHE[key] = [im.copy() for im in frames]
             _FRAME_CACHE.move_to_end(key)
             while len(_FRAME_CACHE) > _FRAME_CACHE_LIMIT:
                 _FRAME_CACHE.popitem(last=False)
-            return frames
+        return frames
     return []

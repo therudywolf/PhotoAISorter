@@ -22,12 +22,32 @@ from app.duplicate_finder import (
     hamming_matrix_stats,
     iter_dup_scan_paths,
     load_records_from_db,
+    max_duplicate_workers,
 )
 from app.images import image_to_jpeg_base64_data_uri, pil_image_to_jpeg_data_uri
 from app.lm_studio import pair_images_duplicate_decision
 from app.signature_db import SignatureDatabase, make_session_key
 from app.task_state import TaskState
 from app.video_frames import extract_frames_reduced, is_animated_gif
+
+
+def _exact_only_candidates(paths: list[Path]) -> tuple[list[Path], int]:
+    """For exact duplicates, files with unique sizes cannot match."""
+    by_size: dict[int, list[Path]] = {}
+    for p in paths:
+        try:
+            size = int(p.stat().st_size)
+        except OSError:
+            continue
+        by_size.setdefault(size, []).append(p)
+    candidates: list[Path] = []
+    skipped = 0
+    for bucket in by_size.values():
+        if len(bucket) > 1:
+            candidates.extend(bucket)
+        else:
+            skipped += 1
+    return candidates, skipped
 
 
 def path_to_jpeg_data_uri(path: Path, video_frames: int, on_log) -> str | None:
@@ -134,8 +154,22 @@ class DuplicateFinderWorker:
             if force_recompute:
                 self.sig_db.clear_session(session_key)
             paths = iter_dup_scan_paths(root, media_mode)
+            scanned_total = len(paths)
+            exact_only = bool(options.include_exact and not options.include_perceptual and not options.include_semantic and not options.use_llm_pairs)
+            if exact_only:
+                paths, skipped_unique_sizes = _exact_only_candidates(paths)
+                if skipped_unique_sizes:
+                    self._emit(
+                        {
+                            "type": "log",
+                            "text": (
+                                "Дубликаты: быстрый точный режим пропустил "
+                                f"{skipped_unique_sizes} файлов с уникальным размером без чтения содержимого."
+                            ),
+                        }
+                    )
             total = len(paths)
-            self._emit({"type": "dup_scan_done", "total": total})
+            self._emit({"type": "dup_scan_done", "total": scanned_total})
             self._emit_stage("scan_signatures", 0, total)
             if not paths:
                 self._emit({"type": "dup_groups_ready", "groups": [], "records": [], "records_count": 0})
@@ -144,7 +178,7 @@ class DuplicateFinderWorker:
             records: list[Any] = []
             done = 0
             lock = threading.Lock()
-            workers = max(1, min(4, options.parallel_workers, len(paths)))
+            workers = max(1, min(max_duplicate_workers(), options.parallel_workers, len(paths)))
 
             def process_one(p: Path) -> None:
                 nonlocal done

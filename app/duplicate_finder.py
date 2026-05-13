@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,19 @@ from app.signature_db import SIG_CACHE_VERSION, SignatureDatabase
 from app.video_frames import extract_frames_reduced, is_animated_gif
 
 LogFn = Callable[[str], None]
+
+
+def max_duplicate_workers() -> int:
+    """Upper bound for local duplicate scanning workers."""
+    return max(4, min(16, int(os.cpu_count() or 4)))
+
+
+def _clamp_duplicate_workers(value: int) -> int:
+    return max(1, min(max_duplicate_workers(), int(value)))
+
+
+def _needs_visual_signature(options: DuplicateFinderOptions) -> bool:
+    return bool(options.include_perceptual or options.include_semantic or options.use_llm_pairs)
 
 
 @dataclass
@@ -128,7 +142,7 @@ def merge_options_from_dict(d: dict[str, Any], base: DuplicateFinderOptions) -> 
     o.hash_max_side = max(64, min(512, int(d.get("hash_max_side", o.hash_max_side))))
     o.meta_require_same_dimensions = bool(d.get("meta_require_same_dimensions", o.meta_require_same_dimensions))
     o.video_sample_frames = max(1, min(12, int(d.get("video_sample_frames", o.video_sample_frames))))
-    o.parallel_workers = max(1, min(4, int(d.get("parallel_workers", o.parallel_workers))))
+    o.parallel_workers = _clamp_duplicate_workers(int(d.get("parallel_workers", o.parallel_workers)))
     kp = str(d.get("keep_policy", o.keep_policy))
     if kp in ("largest_pixels", "newest_mtime", "largest_file"):
         o.keep_policy = kp  # type: ignore[assignment]
@@ -154,7 +168,7 @@ def options_to_dict(o: DuplicateFinderOptions) -> dict[str, Any]:
         "meta_require_same_dimensions": o.meta_require_same_dimensions,
         "video_sample_frames": o.video_sample_frames,
         "keep_policy": o.keep_policy,
-        "parallel_workers": max(1, min(4, o.parallel_workers)),
+        "parallel_workers": _clamp_duplicate_workers(o.parallel_workers),
     }
 
 
@@ -570,6 +584,7 @@ def compute_one_signature(
         return None
     size_b, mtime_ns = st
     row = None if force_recompute else sig_db.get_row(path_norm)
+    need_visual = _needs_visual_signature(options)
     needs_mf = _path_needs_multiframe_phash(path)
     pj: str | None = None
     frames_json_ok = False
@@ -585,18 +600,21 @@ def compute_one_signature(
         and int(row["mtime_ns"]) == mtime_ns
         and int(row["size_bytes"]) == size_b
         and str(row["sig_version"] or "") == SIG_CACHE_VERSION
-        and row["phash_hex"]
-        and (not needs_mf or frames_json_ok)
+        and (not options.include_exact or row["sha256"])
+        and (not need_visual or (row["phash_hex"] and (not needs_mf or frames_json_ok)))
     ):
-        try:
-            ph = imagehash.hex_to_hash(str(row["phash_hex"]))
-            dh = imagehash.hex_to_hash(str(row["dhash_hex"])) if row["dhash_hex"] else None
-            ch = imagehash.hex_to_hash(str(row["colorhash_hex"])) if row["colorhash_hex"] else None
-        except Exception:
-            ph = None
-            dh = None
-            ch = None
-        if ph is not None:
+        ph: imagehash.ImageHash | None = None
+        dh: imagehash.ImageHash | None = None
+        ch: imagehash.ImageHash | None = None
+        if row["phash_hex"]:
+            try:
+                ph = imagehash.hex_to_hash(str(row["phash_hex"]))
+                dh = imagehash.hex_to_hash(str(row["dhash_hex"])) if row["dhash_hex"] else None
+                ch = imagehash.hex_to_hash(str(row["colorhash_hex"])) if row["colorhash_hex"] else None
+            except Exception:
+                if need_visual:
+                    ph = None
+        if not need_visual or ph is not None:
             pf = _parse_phash_frames_json(str(pj) if frames_json_ok else None)
             return FileDupInfo(
                 path=path,
@@ -611,6 +629,16 @@ def compute_one_signature(
                 colorhash=ch,
                 phash_frames=pf,
             )
+
+    if not need_visual:
+        sha = None
+        if options.include_exact:
+            try:
+                sha = file_sha256(path)
+            except OSError:
+                return None
+        sig_db.upsert_signature(path_norm, mtime_ns, size_b, None, None, sha, None, None, None, None)
+        return FileDupInfo(path, path_norm, size_b, mtime_ns, None, None, sha, None, None, colorhash=None)
 
     frames, multi = _load_frames_for_signature(path, options, on_log)
     if not frames:
@@ -812,20 +840,28 @@ def regroup_from_cached_records(
 
 def load_records_from_db(paths: list[Path], sig_db: SignatureDatabase, options: DuplicateFinderOptions) -> list[FileDupInfo]:
     out: list[FileDupInfo] = []
+    need_visual = _needs_visual_signature(options)
     for p in paths:
         row = sig_db.get_row(_norm(p))
         st = _stat(p)
-        if row is None or st is None or not row["phash_hex"]:
+        if row is None or st is None:
+            continue
+        if need_visual and not row["phash_hex"]:
             continue
         size_b, mtime_ns = st
         if int(row["mtime_ns"]) != mtime_ns or int(row["size_bytes"]) != size_b:
             continue
-        try:
-            ph = imagehash.hex_to_hash(str(row["phash_hex"]))
-            dh = imagehash.hex_to_hash(str(row["dhash_hex"])) if row["dhash_hex"] else None
-            ch = imagehash.hex_to_hash(str(row["colorhash_hex"])) if row["colorhash_hex"] else None
-        except Exception:
-            continue
+        ph: imagehash.ImageHash | None = None
+        dh: imagehash.ImageHash | None = None
+        ch: imagehash.ImageHash | None = None
+        if row["phash_hex"]:
+            try:
+                ph = imagehash.hex_to_hash(str(row["phash_hex"]))
+                dh = imagehash.hex_to_hash(str(row["dhash_hex"])) if row["dhash_hex"] else None
+                ch = imagehash.hex_to_hash(str(row["colorhash_hex"])) if row["colorhash_hex"] else None
+            except Exception:
+                if need_visual:
+                    continue
         try:
             pj = row["phash_frames_json"]
         except (KeyError, IndexError, TypeError):
