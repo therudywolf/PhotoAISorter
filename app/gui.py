@@ -191,7 +191,17 @@ class App(ctk.CTk):
         _saved_mode = _mode_migration.get(_saved_mode, _saved_mode)
         if _saved_mode not in _TAG_MODE_LABELS:
             _saved_free = bool(saved.get("free_tag_mode", False))
-            _saved_mode = "free" if _saved_free else "preset_sfw"
+            if _saved_free:
+                _saved_mode = "free"
+            else:
+                try:
+                    from app.context_tags import get_active_set, load_tag_store
+
+                    _active_custom = get_active_set(load_tag_store())
+                    _has_custom = bool(_active_custom and _active_custom.tags)
+                except Exception:
+                    _has_custom = False
+                _saved_mode = "hybrid" if _has_custom else "preset_sfw"
         self._tag_mode_var = ctk.StringVar(value=_saved_mode)
         self._tag_mode_label_var = ctk.StringVar(value=label_for_mode(_saved_mode))
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))

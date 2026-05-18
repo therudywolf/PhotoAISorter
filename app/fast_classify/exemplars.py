@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from PIL import Image
@@ -37,20 +38,29 @@ Only folders that exist are used. forest (custom tag list) stays in context_tags
 """
 
 
-def ensure_refs_layout(on_log: None | callable = None) -> Path:
+def ensure_refs_layout(
+    on_log: Callable[[str], None] | None = None,
+    *,
+    extra_tags: Iterable[str] = (),
+) -> Path:
     root = refs_dir()
     root.mkdir(parents=True, exist_ok=True)
     readme = root / "README.txt"
     if not readme.is_file():
         readme.write_text(_README, encoding="utf-8")
-    for tag in DEFAULT_EXEMPLAR_TAGS:
+    all_tags = list(DEFAULT_EXEMPLAR_TAGS) + [t for t in extra_tags if t]
+    seen: set[str] = set()
+    for tag in all_tags:
+        if tag in seen or not tag:
+            continue
+        seen.add(tag)
         (root / tag).mkdir(parents=True, exist_ok=True)
     if on_log:
         on_log(f"Эталоны: {root}")
     return root
 
 
-def list_exemplar_paths(tag: str) -> list[Path]:
+def list_exemplar_paths(tag: str, *, limit: int = 48) -> list[Path]:
     folder = refs_dir() / tag
     if not folder.is_dir():
         return []
@@ -58,15 +68,25 @@ def list_exemplar_paths(tag: str) -> list[Path]:
     for p in sorted(folder.iterdir()):
         if p.is_file() and p.suffix.lower() in STILL_IMAGE_EXTENSIONS:
             out.append(p)
-    return out[:48]
+    return out[:limit]
 
 
-def load_exemplar_images(tag: str, *, max_side: int, loader) -> list[Image.Image]:
+def load_exemplar_images(
+    tag: str,
+    *,
+    max_side: int,
+    loader: Callable[[Path], Image.Image],
+    on_log: Callable[[str], None] | None = None,
+) -> list[Image.Image]:
     paths = list_exemplar_paths(tag)
     images: list[Image.Image] = []
+    failed: list[str] = []
     for p in paths:
         try:
             images.append(loader(p))
-        except OSError:
+        except OSError as e:
+            failed.append(f"{p.name}: {e}")
             continue
+    if failed and on_log is not None:
+        on_log(f"Эталон '{tag}': {len(failed)} файлов не загрузились: {failed[:3]}")
     return images

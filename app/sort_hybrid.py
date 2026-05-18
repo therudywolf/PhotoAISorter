@@ -233,7 +233,12 @@ def run_hybrid_sort(
             with metrics_lock:
                 metrics["copied"] = int(metrics["copied"]) + 1
             _record_review(path, item["digest"], result, copied_to=str(dest_file))
-            worker._emit({"type": "log", "text": f"[{via}] {path.name} -> {storage_category}"})
+            worker._emit(
+                {
+                    "type": "log",
+                    "text": f"[{via} {result.confidence:.2f}] {path.name} -> {storage_category}",
+                }
+            )
         except OSError as e:
             with metrics_lock:
                 metrics["copy_errors"] = int(metrics["copy_errors"]) + 1

@@ -42,8 +42,13 @@ class FastClassifier:
         self._whitelist = cfg.whitelist or frozenset(cfg.categories)
         self._tags = list(cfg.categories)
         self._embedder = ClipEmbedder(settings, on_log=on_log)
-        ensure_refs_layout(on_log=on_log)
-        self._text_matrix, self._exemplar_matrix, self._exemplar_tag_index = self._build_feature_matrices()
+        ensure_refs_layout(on_log=on_log, extra_tags=cfg.categories)
+        (
+            self._text_matrix,
+            self._exemplar_matrix,
+            self._exemplar_tag_index,
+            self._exemplar_owner,
+        ) = self._build_feature_matrices()
         self._cache: EmbeddingCache | None = None
         if getattr(settings, "cache_embeddings", True):
             try:
@@ -79,7 +84,7 @@ class FastClassifier:
 
     def _build_feature_matrices(
         self,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         all_texts: list[str] = []
         spans: list[tuple[int, int]] = []
         for tag in self._tags:
@@ -95,42 +100,64 @@ class FastClassifier:
             norm = float(np.linalg.norm(mean))
             rows.append((mean / norm).astype(np.float32) if norm > 1e-8 else chunk[0])
         text_matrix = np.stack(rows, axis=0)
-        exemplar_matrix = np.zeros_like(text_matrix)
-        exemplar_index = np.full(len(self._tags), -1, dtype=np.int32)
+
         loader = lambda p: load_image_rgb(p, max_side=self.settings.image_max_side)
-        ex_row = 0
+        exemplar_rows: list[np.ndarray] = []
+        owner_idx: list[int] = []
+        per_tag_count: list[tuple[str, int]] = []
         for i, tag in enumerate(self._tags):
             if not list_exemplar_paths(tag):
                 continue
-            images = load_exemplar_images(tag, max_side=self.settings.image_max_side, loader=loader)
+            images = load_exemplar_images(
+                tag,
+                max_side=self.settings.image_max_side,
+                loader=loader,
+                on_log=self._on_log,
+            )
             if not images:
                 continue
             feats = self._embedder.encode_images(images)
-            mean = feats.mean(axis=0)
-            norm = float(np.linalg.norm(mean))
-            if norm <= 1e-8:
+            kept = _reject_outlier_vectors(feats)
+            if kept.shape[0] == 0:
                 continue
-            if ex_row >= len(self._tags):
-                break
-            exemplar_matrix[ex_row] = (mean / norm).astype(np.float32)
-            exemplar_index[i] = ex_row
-            ex_row += 1
-        if ex_row < len(self._tags):
-            exemplar_matrix = exemplar_matrix[:ex_row]
-        return text_matrix, exemplar_matrix, exemplar_index
+            for v in kept:
+                norm = float(np.linalg.norm(v))
+                if norm <= 1e-8:
+                    continue
+                exemplar_rows.append((v / norm).astype(np.float32))
+                owner_idx.append(i)
+            per_tag_count.append((tag, kept.shape[0]))
+        if exemplar_rows:
+            exemplar_matrix = np.stack(exemplar_rows, axis=0)
+            exemplar_owner = np.asarray(owner_idx, dtype=np.int32)
+        else:
+            exemplar_matrix = np.zeros((0, text_matrix.shape[1]), dtype=np.float32)
+            exemplar_owner = np.zeros((0,), dtype=np.int32)
+        exemplar_tag_index = np.full(len(self._tags), -1, dtype=np.int32)
+        for col_owner in owner_idx:
+            exemplar_tag_index[col_owner] = 1
+        if self._on_log and per_tag_count:
+            head = ", ".join(f"{t}={n}" for t, n in per_tag_count[:8])
+            tail = "" if len(per_tag_count) <= 8 else f" (+{len(per_tag_count) - 8} ещё)"
+            self._on_log(f"Эталоны загружены: {head}{tail}")
+        return text_matrix, exemplar_matrix, exemplar_tag_index, exemplar_owner
 
     def _raw_sims_batch(self, feats: np.ndarray) -> np.ndarray:
-        """Cosine similarity (B, num_tags) with exemplar boost applied per tag."""
+        """Cosine similarity (B, num_tags). Per-tag exemplar boost = max similarity to any exemplar."""
         text_sims = feats @ self._text_matrix.T
         sims = text_sims.copy()
+        if self._exemplar_matrix.shape[0] == 0:
+            return sims
         boost = self.settings.exemplar_boost
-        if self._exemplar_matrix.shape[0] > 0:
-            ex_sims = feats @ self._exemplar_matrix.T
-            for col, tag in enumerate(self._tags):
-                ex_i = int(self._exemplar_tag_index[col])
-                if ex_i >= 0:
-                    sims[:, col] = np.maximum(sims[:, col], ex_sims[:, ex_i] * boost)
+        ex_sims = feats @ self._exemplar_matrix.T  # (B, N_exemplars)
+        for tag_idx in range(len(self._tags)):
+            mask = self._exemplar_owner == tag_idx
+            if not mask.any():
+                continue
+            best = ex_sims[:, mask].max(axis=1) * boost
+            sims[:, tag_idx] = np.maximum(sims[:, tag_idx], best)
         return sims
+
 
     def _result_from_sims_row(self, sims_row: np.ndarray) -> ClassificationResult:
         probs = softmax_probs(
@@ -288,3 +315,22 @@ class FastClassifier:
             else ClassificationResult(UNCATEGORIZED, [], 0.0, "missing", True, "")
             for r in results
         ]
+
+
+def _reject_outlier_vectors(feats: np.ndarray, *, sigma: float = 2.0) -> np.ndarray:
+    """Drop exemplar vectors whose similarity to the centroid is far below median (MAD-based)."""
+    if feats.shape[0] <= 3:
+        return feats
+    norms = np.linalg.norm(feats, axis=1, keepdims=True)
+    norms = np.where(norms > 1e-8, norms, 1.0)
+    nfeats = feats / norms
+    centroid = nfeats.mean(axis=0)
+    c_norm = float(np.linalg.norm(centroid))
+    if c_norm <= 1e-8:
+        return feats
+    centroid = centroid / c_norm
+    sims = nfeats @ centroid
+    med = float(np.median(sims))
+    mad = float(np.median(np.abs(sims - med))) or 1e-3
+    keep = sims >= (med - sigma * 1.4826 * mad)
+    return feats[keep] if keep.any() else feats
