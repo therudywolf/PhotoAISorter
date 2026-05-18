@@ -92,6 +92,7 @@ from app.tag_mode_ui import (
     CLIP_DEVICE_LABELS,
     CLIP_DEVICE_VALUES,
     CLIP_QUALITY_LABELS,
+    CLIP_QUALITY_ORDER,
     CLIP_QUALITY_VALUES,
     FLEXIBLE_TAG_MODES,
     PRESET_TAG_MODES,
@@ -360,45 +361,83 @@ class App(ctk.CTk):
         )
         self._refs_btn.pack(side="left", padx=(0, 8))
 
-        row_hybrid_opts = ctk.CTkFrame(folders, fg_color="transparent")
-        row_hybrid_opts.pack(fill="x", padx=8, pady=(0, 4))
         _fc = load_fast_classify_settings(self._loaded_settings)
         self._hybrid_vlm_fallback_var = ctk.BooleanVar(value=_fc.vlm_fallback)
-        self._hybrid_vlm_cb = ctk.CTkCheckBox(
-            row_hybrid_opts,
-            text=t("folders.tag_mode.hybrid_vlm_fallback"),
-            variable=self._hybrid_vlm_fallback_var,
-            command=self._on_hybrid_option_changed,
+        self._clip_prepare_started = False
+        self._clip_prepare_busy = False
+
+        self._hybrid_clip_panel = ctk.CTkFrame(
+            folders,
+            fg_color=("gray92", "gray18"),
+            corner_radius=8,
         )
-        self._hybrid_vlm_cb.pack(side="left", padx=(0, 12))
-        self._clip_device_row = ctk.CTkFrame(row_hybrid_opts, fg_color="transparent")
-        self._clip_device_row.pack(side="left")
-        ctk.CTkLabel(self._clip_device_row, text=t("folders.tag_mode.clip_device"), width=44).pack(
+
+        ctk.CTkLabel(
+            self._hybrid_clip_panel,
+            text=t("folders.tag_mode.clip_panel_title"),
+            anchor="w",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(fill="x", padx=10, pady=(8, 4))
+
+        row_clip_q = ctk.CTkFrame(self._hybrid_clip_panel, fg_color="transparent")
+        row_clip_q.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(row_clip_q, text=t("folders.tag_mode.clip_quality"), width=72, anchor="w").pack(
+            side="left"
+        )
+        _q_key = _fc.quality if _fc.quality in CLIP_QUALITY_ORDER else "ultra"
+        self._clip_quality_var = ctk.StringVar(
+            value=CLIP_QUALITY_LABELS.get(_q_key, CLIP_QUALITY_LABELS["ultra"])
+        )
+        self._clip_quality_seg = ctk.CTkSegmentedButton(
+            row_clip_q,
+            values=[CLIP_QUALITY_LABELS[k] for k in CLIP_QUALITY_ORDER],
+            command=self._on_clip_quality_clicked,
+        )
+        self._clip_quality_seg.set(self._clip_quality_var.get())
+        self._clip_quality_seg.pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        row_clip_dev = ctk.CTkFrame(self._hybrid_clip_panel, fg_color="transparent")
+        row_clip_dev.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(row_clip_dev, text=t("folders.tag_mode.clip_device"), width=72, anchor="w").pack(
             side="left"
         )
         _dev_key = _fc.device if _fc.device in CLIP_DEVICE_LABELS else "auto"
         self._clip_device_var = ctk.StringVar(value=CLIP_DEVICE_LABELS[_dev_key])
         self._clip_device_seg = ctk.CTkSegmentedButton(
-            self._clip_device_row,
+            row_clip_dev,
             values=list(CLIP_DEVICE_LABELS.values()),
             command=self._on_clip_device_clicked,
         )
         self._clip_device_seg.set(CLIP_DEVICE_LABELS[_dev_key])
-        self._clip_device_seg.pack(side="left", padx=(0, 8))
-        self._clip_quality_row = ctk.CTkFrame(row_hybrid_opts, fg_color="transparent")
-        self._clip_quality_row.pack(side="left", padx=(0, 8))
-        ctk.CTkLabel(self._clip_quality_row, text=t("folders.tag_mode.clip_quality"), width=52).pack(
-            side="left"
+        self._clip_device_seg.pack(side="left", padx=(4, 8))
+        self._hybrid_vlm_cb = ctk.CTkCheckBox(
+            row_clip_dev,
+            text=t("folders.tag_mode.hybrid_vlm_fallback"),
+            variable=self._hybrid_vlm_fallback_var,
+            command=self._on_hybrid_option_changed,
         )
-        _q_key = _fc.quality if _fc.quality in CLIP_QUALITY_LABELS else "max"
-        self._clip_quality_var = ctk.StringVar(value=CLIP_QUALITY_LABELS[_q_key])
-        self._clip_quality_seg = ctk.CTkSegmentedButton(
-            self._clip_quality_row,
-            values=list(CLIP_QUALITY_LABELS.values()),
-            command=self._on_clip_quality_clicked,
+        self._hybrid_vlm_cb.pack(side="left", padx=(0, 4))
+
+        row_clip_actions = ctk.CTkFrame(self._hybrid_clip_panel, fg_color="transparent")
+        row_clip_actions.pack(fill="x", padx=8, pady=(0, 4))
+        self._btn_clip_prepare = ctk.CTkButton(
+            row_clip_actions,
+            text=t("folders.tag_mode.clip_prepare"),
+            width=200,
+            command=self._on_prepare_clip_weights,
         )
-        self._clip_quality_seg.set(CLIP_QUALITY_LABELS[_q_key])
-        self._clip_quality_seg.pack(side="left")
+        self._btn_clip_prepare.pack(side="left", padx=(0, 8))
+
+        self._clip_status_label = ctk.CTkLabel(
+            self._hybrid_clip_panel,
+            text="",
+            anchor="w",
+            justify="left",
+            wraplength=800,
+            text_color=("gray30", "gray70"),
+            font=ctk.CTkFont(size=11),
+        )
+        self._clip_status_label.pack(fill="x", padx=10, pady=(0, 8))
         self._tag_mode_hint = ctk.CTkLabel(
             folders,
             text="",
@@ -699,31 +738,102 @@ class App(ctk.CTk):
         self._refs_btn.configure(state="normal" if enabled else "disabled")
 
     def _update_hybrid_options_visibility(self) -> None:
+        if not hasattr(self, "_hybrid_clip_panel"):
+            return
         if self._tag_mode_var.get() == "hybrid":
-            self._hybrid_vlm_cb.pack(side="left", padx=(0, 12))
-            if hasattr(self, "_clip_device_row"):
-                self._clip_device_row.pack(side="left")
-            if hasattr(self, "_clip_quality_row"):
-                self._clip_quality_row.pack(side="left", padx=(0, 8))
+            self._hybrid_clip_panel.pack(fill="x", padx=8, pady=(0, 6))
+            self._update_clip_status_label()
+            if not self._clip_prepare_started:
+                self._clip_prepare_started = True
+                self.after(300, self._prepare_clip_weights_async)
         else:
-            self._hybrid_vlm_cb.pack_forget()
-            if hasattr(self, "_clip_device_row"):
-                self._clip_device_row.pack_forget()
-            if hasattr(self, "_clip_quality_row"):
-                self._clip_quality_row.pack_forget()
+            self._hybrid_clip_panel.pack_forget()
+
+    def _resolved_fast_classify_settings(self):
+        from app.fast_classify.clip_setup import resolve_gui_fast_classify_settings
+
+        return resolve_gui_fast_classify_settings(
+            self._loaded_settings,
+            quality_key=CLIP_QUALITY_VALUES.get(self._clip_quality_var.get(), "ultra"),
+            device_key=CLIP_DEVICE_VALUES.get(self._clip_device_var.get(), "auto"),
+            vlm_fallback=bool(self._hybrid_vlm_fallback_var.get()),
+        )
+
+    def _update_clip_status_label(self) -> None:
+        if not hasattr(self, "_clip_status_label"):
+            return
+        from app.fast_classify.clip_setup import describe_clip_settings
+        from app.tag_mode_ui import CLIP_QUALITY_HINTS, clip_device_status_line
+
+        try:
+            fc = self._resolved_fast_classify_settings()
+            q_key = CLIP_QUALITY_VALUES.get(self._clip_quality_var.get(), "ultra")
+            hint = CLIP_QUALITY_HINTS.get(q_key, "")
+            cuda = clip_device_status_line()
+            line = describe_clip_settings(fc)
+            if hint:
+                line = f"{line} {hint}"
+            if cuda:
+                line = f"{line}\n{cuda}"
+            self._clip_status_label.configure(text=line)
+        except Exception as e:
+            self._clip_status_label.configure(text=str(e))
+
+    def _on_hybrid_clip_settings_changed(self) -> None:
+        from app.fast_classify.registry import clear_classifier_cache
+
+        clear_classifier_cache()
+        self._update_clip_status_label()
+        self._update_tag_mode_hint()
+        self._save_gui_settings()
 
     def _on_hybrid_option_changed(self) -> None:
-        self._save_gui_settings()
+        self._on_hybrid_clip_settings_changed()
 
     def _on_clip_device_clicked(self, label: str) -> None:
         self._clip_device_var.set(label)
-        self._update_tag_mode_hint()
-        self._save_gui_settings()
+        self._on_hybrid_clip_settings_changed()
 
     def _on_clip_quality_clicked(self, label: str) -> None:
         self._clip_quality_var.set(label)
-        self._update_tag_mode_hint()
-        self._save_gui_settings()
+        self._on_hybrid_clip_settings_changed()
+        self._prepare_clip_weights_async()
+
+    def _on_prepare_clip_weights(self) -> None:
+        self._prepare_clip_weights_async(force=True)
+
+    def _prepare_clip_weights_async(self, *, force: bool = False) -> None:
+        if self._tag_mode_var.get() != "hybrid":
+            return
+        if self._clip_prepare_busy and not force:
+            return
+        self._clip_prepare_busy = True
+        if hasattr(self, "_btn_clip_prepare"):
+            self._btn_clip_prepare.configure(state="disabled")
+        self._clip_status_label.configure(text=t("folders.tag_mode.clip_prepare_running"))
+
+        settings = self._resolved_fast_classify_settings()
+
+        def _work() -> None:
+            from app.fast_classify.clip_setup import ensure_clip_ready
+
+            ok, msg = ensure_clip_ready(settings, on_log=lambda m: self.after(0, lambda: self._append_log(m)))
+
+            def _done() -> None:
+                self._clip_prepare_busy = False
+                if hasattr(self, "_btn_clip_prepare"):
+                    self._btn_clip_prepare.configure(state="normal")
+                if ok:
+                    self._clip_status_label.configure(text=msg)
+                else:
+                    self._clip_status_label.configure(text=msg)
+                self._update_tag_mode_hint()
+
+            self.after(0, _done)
+
+        import threading
+
+        threading.Thread(target=_work, daemon=True).start()
 
     def _show_canonical_tags_dialog(self) -> None:
         win = ctk.CTkToplevel(self)
@@ -863,6 +973,8 @@ class App(ctk.CTk):
         "softmax_temperature",
         "exemplar_boost",
         "text_prompt_fusion",
+        "text_prompt_max_pool",
+        "crop_score_max_pool",
         "torch_compile",
         "use_fp16",
         "cache_embeddings",
@@ -885,9 +997,9 @@ class App(ctk.CTk):
             else "auto"
         )
         block["quality"] = (
-            CLIP_QUALITY_VALUES.get(self._clip_quality_var.get(), "max")
+            CLIP_QUALITY_VALUES.get(self._clip_quality_var.get(), "ultra")
             if hasattr(self, "_clip_quality_var")
-            else "max"
+            else "ultra"
         )
         if block.get("weights_path"):
             pass
@@ -1288,6 +1400,17 @@ class App(ctk.CTk):
                 for msg in blockers:
                     self._append_log(f"Ошибка: {msg}")
                 return
+            from app.fast_classify.clip_setup import ensure_clip_ready
+
+            fc_settings = self._resolved_fast_classify_settings()
+            ok, status = ensure_clip_ready(fc_settings, on_log=self._append_log)
+            if not ok:
+                self._append_log(
+                    "Сортировка отменена: подготовьте CLIP кнопкой «Скачать веса CLIP» "
+                    "или проверьте интернет."
+                )
+                return
+            self._append_log(status)
 
         user_context = tag_cfg.user_context
         session_key = self._sort_session_key_for_current(in_path, out_path, media_mode, tag_mode_str)

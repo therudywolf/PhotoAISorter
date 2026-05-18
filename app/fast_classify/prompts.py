@@ -20,4 +20,6 @@ def clip_text_prompts_for_tag(tag: str, description: str) -> list[str]:
         f"high quality photograph showing {desc}. Folder name: {tag}.",
         f"realistic image, subject: {desc}. Tag {tag}.",
         f"детальная фотография: {desc}. Класс {tag}.",
+        f"the main subject matches: {desc}. Label {tag}.",
+        f"изображение для сортировки в папку {tag}: {desc}",
     ]

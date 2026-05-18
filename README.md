@@ -47,35 +47,43 @@ Duplicate search has several modes with different costs:
 
 For large video libraries, start with `Only exact copies`, then run `Balanced` only on folders where near-duplicates matter.
 
-## Quick Start on Windows
+## Quick start (clone → one launcher)
 
-Requirements: Python 3.10 or newer. Python 3.11 is used by the Docker test image.
+Requirements: **Python 3.10+** on PATH. Internet on first run (pip + CLIP weights).
 
-Double-click:
+| OS | What to run |
+|----|-------------|
+| **Windows** | Double-click [`START_Photo_AI_Sorter.cmd`](START_Photo_AI_Sorter.cmd) |
+| **Linux / macOS** | `chmod +x run.sh && ./run.sh` |
 
-```text
-START_Photo_AI_Sorter.cmd
-```
+The launcher will:
 
-The launcher creates `.venv`, installs dependencies when needed, runs import checks, and starts the GUI. The first launch can take a few minutes while packages are installed; later launches reuse the existing `.venv`.
+1. Create `.venv` in the project folder  
+2. Install Python dependencies from `requirements.txt`  
+3. On NVIDIA GPU: install CUDA PyTorch (`requirements-gpu.txt`) when needed  
+4. Start the GUI  
 
-To create a real desktop shortcut, double-click once:
+**First launch** can take several minutes (pip). **First hybrid CLIP sort** may download ~900 MB (`ViT-L-14` weights) into `data/clip_weights/` — use the **«Скачать веса CLIP»** button in the GUI or start a sort (download runs automatically).
 
-```text
-CREATE_DESKTOP_SHORTCUT.cmd
-```
+Optional:
 
-For a diagnostic console run, use:
+| File | Purpose |
+|------|---------|
+| [`run.bat`](run.bat) | Windows console launcher (`run.bat gui`, `run.bat test`) |
+| [`run.sh`](run.sh) | Same as above on Linux |
+| [`CREATE_DESKTOP_SHORTCUT.cmd`](CREATE_DESKTOP_SHORTCUT.cmd) | Windows desktop shortcut |
 
-```bat
-run.bat
-```
+Run tests: `run.bat test` (Windows) or `./run.sh test` (Linux).
 
-Run tests:
+### Hybrid CLIP in the GUI
 
-```bat
-run.bat test
-```
+1. Tag mode → **Быстрая CLIP**  
+2. Panel **«Локальный CLIP»**:  
+   - **Точность:** Быстро / Баланс / Макс / **Ультра** (default, best accuracy)  
+   - **CLIP:** Авто / GPU / CPU  
+   - **VLM fallback** — LM Studio for uncertain files  
+   - **Скачать веса CLIP** — download/check model weights before sorting  
+3. Configure tags (**Теги…**) and exemplars (**Эталоны…** → `data/refs/<tag>/`)
 
 The app does not require a committed API key. For servers that enforce bearer auth, set:
 
@@ -106,14 +114,7 @@ python -m venv .venv
 .venv/Scripts/python main.py
 ```
 
-On Linux/macOS:
-
-```bash
-chmod +x run.sh
-./run.sh
-```
-
-Or manually:
+Or manually (without launcher):
 
 ```bash
 python -m venv .venv

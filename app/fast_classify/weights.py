@@ -209,6 +209,6 @@ def format_clip_load_error(exc: BaseException) -> str:
     return (
         f"Ошибка загрузки CLIP: {exc}\n"
         f"Кэш весов: {cache}\n"
-        "Скачайте ViT-B-32.pt вручную (тег openai) и укажите путь в "
+        "Скачайте файл .pt вручную (тег openai) и укажите путь в "
         "fast_classify.weights_path, либо проверьте интернет и права на запись."
     )

@@ -18,7 +18,7 @@ def test_fast_classify_settings_roundtrip() -> None:
     s = FastClassifySettings.from_dict(raw)
     assert s.batch_size == 64
     assert s.confidence_threshold == 0.31
-    assert s.quality == "max"
+    assert s.quality in ("max", "ultra")
     assert s.min_margin >= 0.08
     assert s.softmax_temperature >= 0.05
     assert s.vlm_fallback is False

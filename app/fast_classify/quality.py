@@ -14,8 +14,11 @@ if TYPE_CHECKING:
 QUALITY_FAST = "fast"
 QUALITY_BALANCED = "balanced"
 QUALITY_MAX = "max"
+QUALITY_ULTRA = "ultra"
 
-QUALITY_VALUES: frozenset[str] = frozenset({QUALITY_FAST, QUALITY_BALANCED, QUALITY_MAX})
+QUALITY_VALUES: frozenset[str] = frozenset(
+    {QUALITY_FAST, QUALITY_BALANCED, QUALITY_MAX, QUALITY_ULTRA}
+)
 
 
 def _cuda_ready() -> bool:
@@ -43,9 +46,9 @@ def finalize_fast_classify_settings(
 ) -> FastClassifySettings:
     """Apply quality tier defaults; respect keys the user set in gui_settings.json."""
     explicit = explicit_keys or frozenset()
-    q = (settings.quality or QUALITY_MAX).strip().lower()
+    q = (settings.quality or QUALITY_ULTRA).strip().lower()
     if q not in QUALITY_VALUES:
-        q = QUALITY_MAX
+        q = QUALITY_ULTRA
     cuda = _cuda_ready() and (settings.device or "auto").strip().lower() != "cpu"
     cpus = _cpu_count()
 
@@ -65,6 +68,8 @@ def finalize_fast_classify_settings(
             "softmax_temperature": 0.06,
             "exemplar_boost": 1.18,
             "text_prompt_fusion": 0.55,
+            "text_prompt_max_pool": False,
+            "crop_score_max_pool": False,
         }
     elif q == QUALITY_BALANCED:
         patch = {
@@ -82,8 +87,10 @@ def finalize_fast_classify_settings(
             "softmax_temperature": 0.065,
             "exemplar_boost": 1.24,
             "text_prompt_fusion": 0.62,
+            "text_prompt_max_pool": False,
+            "crop_score_max_pool": True,
         }
-    else:
+    elif q == QUALITY_MAX:
         patch = {
             "quality": q,
             "model_name": "ViT-L-14" if cuda else "ViT-B-16",
@@ -99,6 +106,27 @@ def finalize_fast_classify_settings(
             "softmax_temperature": 0.065,
             "exemplar_boost": 1.32,
             "text_prompt_fusion": 0.68,
+            "text_prompt_max_pool": False,
+            "crop_score_max_pool": True,
+        }
+    else:
+        patch = {
+            "quality": q,
+            "model_name": "ViT-L-14" if cuda else "ViT-B-16",
+            "pretrained": "openai",
+            "batch_size": 28 if cuda else 20,
+            "image_max_side": 576 if cuda else 480,
+            "multi_crop": True,
+            "multi_crop_views": 9,
+            "video_frames": 9,
+            "prefetch_workers": min(12, cpus),
+            "confidence_threshold": 0.20,
+            "min_margin": 0.11,
+            "softmax_temperature": 0.055,
+            "exemplar_boost": 1.38,
+            "text_prompt_fusion": 0.75,
+            "text_prompt_max_pool": True,
+            "crop_score_max_pool": True,
         }
 
     for key in (
@@ -115,6 +143,8 @@ def finalize_fast_classify_settings(
         "softmax_temperature",
         "exemplar_boost",
         "text_prompt_fusion",
+        "text_prompt_max_pool",
+        "crop_score_max_pool",
     ):
         if key in explicit:
             patch.pop(key, None)

@@ -139,6 +139,17 @@ else
     echo "      Зависимости уже актуальны."
 fi
 
+if command -v nvidia-smi &>/dev/null; then
+    if ! "$PY" -c "import torch; import sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+        echo "[2/3] NVIDIA GPU найден — ставлю PyTorch с CUDA (cu124) ..."
+        if ! "$PY" -m pip install -r requirements-gpu.txt --upgrade -q --disable-pip-version-check; then
+            echo "[ПРЕДУПРЕЖДЕНИЕ] Не удалось установить torch+cuda. CLIP будет на CPU."
+        else
+            echo "      PyTorch CUDA установлен."
+        fi
+    fi
+fi
+
 if [ "$LAUNCH_MODE" = "test" ]; then
     "$PY" -m pip install -r requirements-dev.txt --upgrade -q --disable-pip-version-check || {
         echo "[ОШИБКА] pip install dev-зависимостей завершился с ошибкой."

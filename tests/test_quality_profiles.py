@@ -7,6 +7,15 @@ from app.fast_classify.crops import multi_crop_views
 from app.fast_classify.quality import finalize_fast_classify_settings
 
 
+def test_ultra_profile_enables_max_pooling() -> None:
+    s = finalize_fast_classify_settings(
+        FastClassifySettings.from_dict({"quality": "ultra", "device": "cpu"}, explicit_keys=frozenset({"quality", "device"}))
+    )
+    assert s.text_prompt_max_pool is True
+    assert s.crop_score_max_pool is True
+    assert s.multi_crop_views >= 7
+
+
 def test_max_profile_cpu_uses_b16_not_l14() -> None:
     s = finalize_fast_classify_settings(
         FastClassifySettings.from_dict({"quality": "max", "device": "cpu"}, explicit_keys=frozenset({"quality", "device"}))
@@ -37,4 +46,5 @@ def test_multi_crop_views_count() -> None:
 
     im = Image.new("RGB", (200, 100), color=(10, 20, 30))
     assert len(multi_crop_views(im, views=5)) == 5
+    assert len(multi_crop_views(im, views=9)) == 9
     assert len(multi_crop_views(im, views=1)) == 1

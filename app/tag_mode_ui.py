@@ -43,8 +43,18 @@ CLIP_QUALITY_LABELS: dict[str, str] = {
     "fast": "Быстро",
     "balanced": "Баланс",
     "max": "Макс",
+    "ultra": "Ультра",
 }
 CLIP_QUALITY_VALUES: dict[str, str] = {v: k for k, v in CLIP_QUALITY_LABELS.items()}
+
+CLIP_QUALITY_ORDER: tuple[str, ...] = ("fast", "balanced", "max", "ultra")
+
+CLIP_QUALITY_HINTS: dict[str, str] = {
+    "fast": "ViT-B-32, без кропов — максимальная скорость.",
+    "balanced": "ViT-B-16, 3 кропа — компромисс скорость/точность.",
+    "max": "ViT-L-14, 5 кропов — высокая точность.",
+    "ultra": "ViT-L-14, 576px, 9 кропов — максимальная точность (медленнее).",
+}
 
 
 def label_for_mode(mode: str) -> str:
@@ -76,7 +86,7 @@ def build_tag_mode_hint(
     *,
     clip_ready: bool | None = None,
     clip_device: str = "auto",
-    clip_quality: str = "max",
+    clip_quality: str = "ultra",
 ) -> str:
     if mode == "free":
         return t("folders.tag_mode.hint_free")
@@ -89,24 +99,19 @@ def build_tag_mode_hint(
         ready = clip_available() if clip_ready is None else clip_ready
         status = t("folders.tag_mode.hybrid_clip_ok" if ready else "folders.tag_mode.hybrid_clip_missing")
         dev_lbl = CLIP_DEVICE_LABELS.get(clip_device, CLIP_DEVICE_LABELS["auto"])
-        q_lbl = CLIP_QUALITY_LABELS.get(clip_quality, CLIP_QUALITY_LABELS["max"])
+        q_lbl = CLIP_QUALITY_LABELS.get(clip_quality, CLIP_QUALITY_LABELS["ultra"])
         cuda_line = clip_device_status_line()
         model_line = ""
         try:
-            from app.fast_classify.config import load_fast_classify_settings
+            from app.fast_classify.clip_setup import describe_clip_settings, resolve_gui_fast_classify_settings
 
-            fc = load_fast_classify_settings(
-                {
-                    "fast_classify": {
-                        "quality": clip_quality,
-                        "device": clip_device,
-                    }
-                }
+            fc = resolve_gui_fast_classify_settings(
+                None,
+                quality_key=clip_quality,
+                device_key=clip_device,
             )
-            crop = f", crop×{fc.multi_crop_views}" if fc.multi_crop else ""
-            model_line = (
-                f"Профиль «{q_lbl}»: {fc.model_name}, {fc.image_max_side}px{crop}."
-            )
+            hint = CLIP_QUALITY_HINTS.get(clip_quality, "")
+            model_line = f"{describe_clip_settings(fc)} {hint}".strip()
         except Exception:
             model_line = f"Профиль качества: {q_lbl}."
         try:

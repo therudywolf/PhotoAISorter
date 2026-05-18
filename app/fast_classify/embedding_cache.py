@@ -102,7 +102,9 @@ def model_cache_key(settings) -> str:  # type: ignore[no-untyped-def]
     if not getattr(settings, "multi_crop", False):
         crops = 1
     fusion = float(getattr(settings, "text_prompt_fusion", 0.68))
+    tp_max = int(bool(getattr(settings, "text_prompt_max_pool", False)))
+    crop_pool = int(bool(getattr(settings, "crop_score_max_pool", False)))
     return (
         f"{settings.model_name}|{settings.pretrained}|{device}|fp16={fp16}"
-        f"|side={side}|crops={crops}|tf={fusion:.2f}"
+        f"|side={side}|crops={crops}|tf={fusion:.2f}|tpmax={tp_max}|cpool={crop_pool}"
     )

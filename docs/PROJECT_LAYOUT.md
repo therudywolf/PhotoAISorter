@@ -11,6 +11,7 @@ Canonical folders for a working copy of Photo AI Sorter.
 | `main.py` | Entry point |
 | `run.bat` | Windows launcher (venv, deps, GUI, tests) |
 | `run.sh` | Linux/macOS launcher (same roles as `run.bat`) |
+| `START_Photo_AI_Sorter.sh` | Thin wrapper → `run.sh` |
 | `START_Photo_AI_Sorter.cmd` | Double-click GUI wrapper → `run.bat gui` |
 | `CREATE_DESKTOP_SHORTCUT.cmd` | Creates a desktop shortcut to the `.cmd` launcher |
 | `requirements.txt` | Runtime pip dependencies |
