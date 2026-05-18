@@ -84,7 +84,8 @@ def _log_cpu_torch_hint(torch: Any, on_log: Callable[[str], None] | None) -> Non
     if "+cpu" in ver or not _nvidia_gpu_detected():
         if _nvidia_gpu_detected():
             on_log(
-                f"CLIP: PyTorch без CUDA ({ver}). Для RTX и др.: {TORCH_CUDA_INSTALL_CMD}"
+                f"CLIP: PyTorch без CUDA ({ver}). Перезапустите run.bat "
+                f"(поставит CUDA автоматически) или: {TORCH_CUDA_INSTALL_CMD}"
             )
         return
     if _nvidia_gpu_detected():

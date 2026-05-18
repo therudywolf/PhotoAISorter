@@ -104,6 +104,20 @@ if "%NEED_INSTALL%"=="1" (
     echo       Зависимости уже актуальны.
 )
 
+where nvidia-smi >nul 2>&1
+if not errorlevel 1 (
+    "%PY%" -c "import torch; import sys; sys.exit(0 if torch.cuda.is_available() else 1)" >nul 2>&1
+    if errorlevel 1 (
+        echo [2/3] NVIDIA GPU найден — ставлю PyTorch с CUDA ^(cu124^) ...
+        "%PY%" -m pip install -r requirements-gpu.txt --upgrade -q --disable-pip-version-check
+        if errorlevel 1 (
+            echo [ПРЕДУПРЕЖДЕНИЕ] Не удалось установить torch+cuda. CLIP будет на CPU.
+        ) else (
+            echo       PyTorch CUDA установлен.
+        )
+    )
+)
+
 if /i "%~1"=="test" (
     "%PY%" -m pip install -r requirements-dev.txt --upgrade -q --disable-pip-version-check
     if errorlevel 1 goto :pip_fail_dev

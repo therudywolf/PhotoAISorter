@@ -98,7 +98,9 @@ class ExemplarsDialog(ctk.CTkToplevel):
         store = load_tag_store()
         active = get_active_set(store)
         tags = [t for t in build_custom_categories(active) if t != "uncategorized"] if active else []
-        ensure_refs_layout(extra_tags=tags)
+        root = ensure_refs_layout(extra_tags=tags)
+        if self._on_log:
+            self._on_log(f"Эталоны хранятся в {root} (папка data/ проекта, не в git)")
         if not tags:
             self._tag_combo.configure(values=["(нет тегов)"])
             self._tag_var.set("(нет тегов)")

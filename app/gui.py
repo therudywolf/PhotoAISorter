@@ -209,6 +209,9 @@ class App(ctk.CTk):
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))
         self._review_first_var = ctk.BooleanVar(value=bool(saved.get("review_first_sort", False)))
 
+        from app.paths import migrate_roaming_clip_data
+
+        migrate_roaming_clip_data()
         self._build()
         if self._interrupted_sort_sessions:
             self._append_log(f"Найдено прерванных сессий сортировки: {self._interrupted_sort_sessions}.")

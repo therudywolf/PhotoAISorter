@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from app.db import default_db_path
+from app.paths import clip_embedding_cache_path, migrate_roaming_clip_data
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS clip_embeddings (
@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS clip_embeddings (
 
 
 def _cache_path() -> Path:
-    return default_db_path().parent / "clip_cache.sqlite3"
+    migrate_roaming_clip_data()
+    return clip_embedding_cache_path()
 
 
 class EmbeddingCache:

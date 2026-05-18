@@ -20,8 +20,9 @@ category_aliases.json
 gui_settings.json
 **/gui_settings.json
 
-# Local reference photos for fast CLIP (personal)
-refs/
+# Local persistent data (refs, CLIP weights — next to project / install dir)
+data/*
+!data/README.txt
 
 # Testing / linting
 .pytest_cache/

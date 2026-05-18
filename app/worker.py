@@ -939,7 +939,7 @@ class SortWorker:
             if self.tag_config.mode == TagMode.HYBRID:
                 from app.sort_hybrid import run_hybrid_sort
 
-                run_hybrid_sort(
+                finish_reason = run_hybrid_sort(
                     self,
                     source_dir,
                     dest_dir,

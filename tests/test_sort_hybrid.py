@@ -24,8 +24,9 @@ def test_worker_hybrid_uses_run_hybrid_sort(tmp_path: Path, monkeypatch: object)
 
     called = {"n": 0}
 
-    def fake_hybrid(*_a, **_k) -> None:
+    def fake_hybrid(*_a, **_k) -> str:
         called["n"] += 1
+        return "completed"
 
     monkeypatch.setattr("app.sort_hybrid.run_hybrid_sort", fake_hybrid)
 

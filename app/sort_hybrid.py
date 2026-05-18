@@ -99,7 +99,7 @@ def run_hybrid_sort(
     _timeout: Callable[[], tuple[float, float] | None],
     _record_review: Callable[..., None],
     _register_api_error: Callable[[Exception], None],
-) -> None:
+) -> str:
     settings = load_fast_classify_settings()
     if not clip_available():
         worker._emit({"type": "log", "text": missing_clip_message()})
@@ -142,10 +142,17 @@ def run_hybrid_sort(
     )
 
     pending: list[dict[str, Any]] = []
+    total_files = len(files)
+    worker._emit(
+        {
+            "type": "log",
+            "text": f"CLIP: подготовка {total_files} файлов (хеш и кеш, параллельно)…",
+        }
+    )
 
-    for path in files:
-        if worker._stop.is_set() or not worker._wait_if_paused():
-            break
+    def _prepare_one(path: Path) -> dict[str, Any] | None:
+        if worker._stop.is_set():
+            return None
         path_norm = str(path.resolve())
         try:
             st = path.stat()
@@ -153,20 +160,21 @@ def run_hybrid_sort(
             size_bytes = int(st.st_size)
         except OSError as e:
             worker._emit({"type": "log", "text": f"stat error {path}: {e}"})
-            continue
+            return None
 
         if worker.resume_session and worker.db.sort_session_item_status(
             session_key, path_norm, mtime_ns=mtime_ns, size_bytes=size_bytes
         ) == "done":
             with metrics_lock:
                 metrics["cache_skip"] = int(metrics["cache_skip"]) + 1
-            continue
+            complete_task(0.0)
+            return None
 
         try:
             digest = file_sha256(path)
         except OSError as e:
             worker._emit({"type": "log", "text": f"hash error {path}: {e}"})
-            continue
+            return None
 
         if worker.db.upsert_file_record(digest, str(path), PIPELINE_VERSION) == "skip":
             with metrics_lock:
@@ -180,20 +188,50 @@ def run_hybrid_sort(
                 sha256=digest,
                 category="cached",
             )
-            continue
+            complete_task(0.0)
+            return None
 
         suf = path.suffix.lower()
         use_video = suf in VIDEO_EXTENSIONS or (suf == GIF_EXTENSION and is_animated_gif(path))
-        pending.append(
-            {
-                "path": path,
-                "path_norm": path_norm,
-                "mtime_ns": mtime_ns,
-                "size_bytes": size_bytes,
-                "digest": digest,
-                "use_video": use_video,
-            }
-        )
+        return {
+            "path": path,
+            "path_norm": path_norm,
+            "mtime_ns": mtime_ns,
+            "size_bytes": size_bytes,
+            "digest": digest,
+            "use_video": use_video,
+        }
+
+    prep_workers = max(1, min(8, int(getattr(worker, "workers", 3))))
+    prep_done = 0
+    with ThreadPoolExecutor(max_workers=prep_workers) as pool:
+        futures = [pool.submit(_prepare_one, path) for path in files]
+        for fut in as_completed(futures):
+            prep_done += 1
+            if prep_done == 1 or prep_done % 500 == 0 or prep_done == total_files:
+                worker._emit(
+                    {
+                        "type": "log",
+                        "text": f"CLIP: подготовка {prep_done}/{total_files}…",
+                    }
+                )
+            if worker._stop.is_set():
+                break
+            item = fut.result()
+            if item is not None:
+                pending.append(item)
+
+    worker._emit(
+        {
+            "type": "log",
+            "text": (
+                f"CLIP: к классификации {len(pending)} файлов "
+                f"(пропущено по кешу/сессии: {int(metrics.get('cache_skip', 0))})."
+            ),
+        }
+    )
+    if worker._stop.is_set():
+        return "stopped"
 
     def _vlm_classify(
         path: Path,
@@ -487,6 +525,7 @@ def run_hybrid_sort(
                 worker.db._maybe_commit(force=True)
         except Exception:
             pass
+    return "stopped" if worker._stop.is_set() else "completed"
 
 
 def _probe_lm_studio(api_base: str, *, timeout: float = 2.5) -> bool:

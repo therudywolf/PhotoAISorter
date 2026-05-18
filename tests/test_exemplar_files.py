@@ -12,10 +12,13 @@ from app.fast_classify.exemplars import list_exemplar_paths
 
 
 def test_add_exemplar_files(monkeypatch: object, tmp_path: Path) -> None:
+    from app import paths
     from app.fast_classify import exemplars
 
-    monkeypatch.setattr(ef, "refs_dir", lambda: tmp_path)
-    monkeypatch.setattr(exemplars, "refs_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "refs_dir", lambda: tmp_path / "refs")
+    monkeypatch.setattr(ef, "refs_dir", lambda: tmp_path / "refs")
+    monkeypatch.setattr(exemplars, "refs_dir", lambda: tmp_path / "refs")
+    (tmp_path / "refs").mkdir()
     src = tmp_path / "in.jpg"
     src.write_bytes(b"jpeg")
     n = ef.add_exemplar_files("my_dog", [src])

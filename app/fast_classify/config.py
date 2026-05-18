@@ -9,11 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.db import default_db_path
-
-
 def refs_dir() -> Path:
-    return default_db_path().parent / "refs"
+    from app.paths import refs_dir as _dir
+
+    return _dir()
 
 
 @dataclass(frozen=True)

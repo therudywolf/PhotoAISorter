@@ -19,9 +19,10 @@ _MIN_OPENAI_VITB32_BYTES = 300_000_000
 
 
 def clip_cache_dir() -> Path:
-    from app.db import default_db_path
+    from app.paths import clip_weights_dir, migrate_roaming_clip_data
 
-    path = default_db_path().parent / "clip_weights"
+    migrate_roaming_clip_data()
+    path = clip_weights_dir()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
