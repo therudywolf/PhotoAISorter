@@ -106,13 +106,27 @@ TAG_SPECIFICITY: dict[str, int] = {
 }
 
 
-def pick_tag(scores: dict[str, float], *, whitelist: frozenset[str]) -> tuple[str, float, list[str]]:
+def pick_tag(
+    scores: dict[str, float],
+    *,
+    whitelist: frozenset[str],
+    apply_preset_rules: bool = True,
+) -> tuple[str, float, list[str]]:
     """Choose final tag with priority rules; return (tag, confidence, ranked candidates)."""
     filtered = {k: float(v) for k, v in scores.items() if k in whitelist and float(v) > -1e9}
     if not filtered:
         return UNCATEGORIZED, 0.0, []
 
     working = dict(filtered)
+
+    if not apply_preset_rules:
+        ranked = sorted(
+            working.items(),
+            key=lambda kv: (-kv[1], -TAG_SPECIFICITY.get(kv[0], 1), kv[0]),
+        )
+        tag, score = ranked[0]
+        candidates = [t for t, _ in ranked[:5] if t != UNCATEGORIZED]
+        return tag, score, candidates
 
     for generic, specifics in SPECIFIC_OVER_GENERIC.items():
         if generic not in working:

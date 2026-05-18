@@ -20,17 +20,17 @@ class FastClassifySettings:
     model_name: str = "ViT-B-32"
     pretrained: str = "openai"
     batch_size: int = 64
-    image_max_side: int = 384
-    confidence_threshold: float = 0.28
-    min_margin: float = 0.06
-    softmax_temperature: float = 0.05
+    image_max_side: int = 448
+    confidence_threshold: float = 0.24
+    min_margin: float = 0.09
+    softmax_temperature: float = 0.07
     vlm_fallback: bool = True
-    exemplar_boost: float = 1.15
+    exemplar_boost: float = 1.28
     device: str = "auto"
     use_fp16: bool = True
     cache_embeddings: bool = True
     prefetch_workers: int = 4
-    video_frames: int = 3
+    video_frames: int = 5
     weights_path: str = ""
 
     @classmethod

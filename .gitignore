@@ -24,6 +24,10 @@ gui_settings.json
 data/*
 !data/README.txt
 
+# Runtime cache (SQLite, hashes, WAL — keep on fast disk)
+tmp/*
+!tmp/README.txt
+
 # Testing / linting
 .pytest_cache/
 .ruff_cache/

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from app.paths import clip_embedding_cache_path, migrate_roaming_clip_data
+from app.paths import clip_embedding_cache_path, migrate_app_state_to_project_tmp
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS clip_embeddings (
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS clip_embeddings (
 
 
 def _cache_path() -> Path:
-    migrate_roaming_clip_data()
+    migrate_app_state_to_project_tmp()
     return clip_embedding_cache_path()
 
 

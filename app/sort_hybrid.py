@@ -19,7 +19,8 @@ from app.classification_result import ClassificationResult
 from app.constants import GIF_EXTENSION, PIPELINE_VERSION, UNCATEGORIZED, VIDEO_EXTENSIONS
 from app.fast_classify import clip_available, load_fast_classify_settings, missing_clip_message
 from app.fast_classify.registry import get_classifier
-from app.images import file_sha256, image_to_jpeg_base64_data_uri, video_contact_sheet_data_uri
+from app.file_hash_cache import get_file_hash_cache
+from app.images import image_to_jpeg_base64_data_uri, video_contact_sheet_data_uri
 from app.lm_studio import chat_completion_cfg
 from app.video_frames import extract_frames_reduced, is_animated_gif
 from app.worker import has_disk_space_for_copy, unique_dest_path
@@ -39,12 +40,14 @@ def _merge_vlm_with_clip(
         return vlm
     if vlm.category == UNCATEGORIZED:
         return clip
-    if clip.confidence >= confidence_threshold:
-        if vlm.confidence < clip.confidence:
+    if clip.confidence >= confidence_threshold and not clip.needs_review:
+        if vlm.confidence < clip.confidence + 0.04:
             return clip
-        if clip.needs_review and not vlm.needs_review and vlm.confidence <= clip.confidence:
-            return clip
-    return vlm
+    if clip.needs_review and vlm.confidence > clip.confidence + 0.06:
+        return vlm
+    if vlm.confidence > clip.confidence + 0.08:
+        return vlm
+    return clip if clip.confidence >= vlm.confidence else vlm
 
 
 def _vlm_via_uri(
@@ -171,7 +174,9 @@ def run_hybrid_sort(
             return None
 
         try:
-            digest = file_sha256(path)
+            digest = get_file_hash_cache().sha256_for_file(
+                path, mtime_ns=mtime_ns, size_bytes=size_bytes
+            )
         except OSError as e:
             worker._emit({"type": "log", "text": f"hash error {path}: {e}"})
             return None

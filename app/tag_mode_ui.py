@@ -82,9 +82,17 @@ def build_tag_mode_hint(
         status = t("folders.tag_mode.hybrid_clip_ok" if ready else "folders.tag_mode.hybrid_clip_missing")
         dev_lbl = CLIP_DEVICE_LABELS.get(clip_device, CLIP_DEVICE_LABELS["auto"])
         cuda_line = clip_device_status_line()
+        try:
+            from app.paths import project_tmp_dir
+
+            cache_line = f"Кеш: {project_tmp_dir()}"
+        except Exception:
+            cache_line = ""
         extra = f"Устройство CLIP: {dev_lbl}."
         if cuda_line:
             extra = f"{extra} {cuda_line}"
+        if cache_line:
+            extra = f"{extra} {cache_line}"
         return f"{base}\n{status}\n{extra}"
     return t("folders.tag_mode.hint_preset")
 

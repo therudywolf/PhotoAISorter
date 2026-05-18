@@ -59,12 +59,11 @@ CREATE INDEX IF NOT EXISTS idx_sort_items_session_status ON sort_session_items(s
 
 
 def default_db_path() -> Path:
-    """Store DB under %APPDATA%/PhotoAISorter on Windows, else ~/.local/share/PhotoAISorter."""
-    if os.name == "nt":
-        base = os.environ.get("APPDATA")
-        if base:
-            return Path(base) / "PhotoAISorter" / "state.sqlite3"
-    return Path.home() / ".local" / "share" / "PhotoAISorter" / "state.sqlite3"
+    """Sort/session SQLite under project tmp/ (fast disk); override via PHOTO_AI_SORTER_TMP."""
+    from app.paths import app_state_dir, migrate_app_state_to_project_tmp
+
+    migrate_app_state_to_project_tmp()
+    return app_state_dir() / "state.sqlite3"
 
 
 def make_sort_session_key(

@@ -4,4 +4,4 @@ Local persistent data for Photo AI Sorter (not committed to git).
   clip_weights/   — downloaded ViT-B-32.pt and similar
   clip_cache.sqlite3 — CLIP embedding cache
 
-Sort/duplicate SQLite caches live under %APPDATA%\PhotoAISorter instead.
+Runtime SQLite/hash caches live under project tmp/ (see tmp/README.txt).

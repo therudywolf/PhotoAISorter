@@ -209,10 +209,14 @@ class App(ctk.CTk):
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))
         self._review_first_var = ctk.BooleanVar(value=bool(saved.get("review_first_sort", False)))
 
-        from app.paths import migrate_roaming_clip_data
+        from app.paths import migrate_app_state_to_project_tmp, migrate_roaming_clip_data
 
+        from app.paths import project_tmp_dir
+
+        migrate_app_state_to_project_tmp()
         migrate_roaming_clip_data()
         self._build()
+        self._append_log(f"Кеш приложения: {project_tmp_dir()} (держите проект на SSD)")
         if self._interrupted_sort_sessions:
             self._append_log(f"Найдено прерванных сессий сортировки: {self._interrupted_sort_sessions}.")
         if self._cache_clear_on_start:

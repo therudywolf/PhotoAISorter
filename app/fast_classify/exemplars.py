@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image
 
 from app.constants import STILL_IMAGE_EXTENSIONS
-from app.paths import migrate_roaming_clip_data, refs_dir
+from app.paths import migrate_app_state_to_project_tmp, migrate_roaming_clip_data, refs_dir
 
 DEFAULT_EXEMPLAR_TAGS: tuple[str, ...] = (
     "iam",
@@ -44,6 +44,7 @@ def ensure_refs_layout(
     *,
     extra_tags: Iterable[str] = (),
 ) -> Path:
+    migrate_app_state_to_project_tmp()
     migrate_roaming_clip_data()
     root = refs_dir()
     root.mkdir(parents=True, exist_ok=True)

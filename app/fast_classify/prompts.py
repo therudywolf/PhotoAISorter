@@ -16,4 +16,6 @@ def clip_text_prompts_for_tag(tag: str, description: str) -> list[str]:
         f"a photo of {label}. {desc}",
         f"a picture in category {tag}. {desc}",
         f"{desc} Category: {tag}.",
+        f"фотография категории «{label}». {desc}",
+        f"high quality photograph showing {desc}. Folder name: {tag}.",
     ]

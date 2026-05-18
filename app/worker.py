@@ -718,7 +718,11 @@ class SortWorker:
                     return
 
                 try:
-                    digest = file_sha256(path)
+                    from app.file_hash_cache import get_file_hash_cache
+
+                    digest = get_file_hash_cache().sha256_for_file(
+                        path, mtime_ns=mtime_ns, size_bytes=size_bytes
+                    )
                 except OSError as e:
                     self._emit({"type": "log", "text": f"hash error {path}: {e}"})
                     complete_task(time.monotonic() - t0)

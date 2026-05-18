@@ -13,3 +13,10 @@ def test_refs_under_project_data() -> None:
     assert refs.name == "refs"
     assert refs.parent.name == "data"
     assert refs.parent.parent == paths.project_root()
+
+
+def test_tmp_cache_under_project() -> None:
+    tmp = paths.project_tmp_dir()
+    assert tmp.name == "tmp"
+    assert tmp.parent == paths.project_root()
+    assert paths.clip_embedding_cache_path().parent == tmp

@@ -23,7 +23,7 @@ from app.fast_classify.priority import pick_tag
 from app.fast_classify.prompts import clip_text_prompts_for_tag
 from app.fast_classify.scoring import confidence_from_probs, needs_review, softmax_probs
 from app.images import load_image_rgb
-from app.tag_config import ResolvedTagConfig
+from app.tag_config import ResolvedTagConfig, TagMode
 
 
 class FastClassifier:
@@ -41,6 +41,7 @@ class FastClassifier:
         self._on_log = on_log
         self._whitelist = cfg.whitelist or frozenset(cfg.categories)
         self._tags = list(cfg.categories)
+        self._apply_preset_rules = cfg.mode == TagMode.PRESET
         self._embedder = ClipEmbedder(settings, on_log=on_log)
         ensure_refs_layout(on_log=on_log, extra_tags=cfg.categories)
         self._text_matrix, self._exemplar_matrix, self._exemplar_owner = self._build_feature_matrices()
@@ -146,8 +147,12 @@ class FastClassifier:
             mask = self._exemplar_owner == tag_idx
             if not mask.any():
                 continue
-            best = ex_sims[:, mask].max(axis=1) * boost
-            sims[:, tag_idx] = np.maximum(sims[:, tag_idx], best)
+            col = ex_sims[:, mask]
+            best = col.max(axis=1) * boost
+            top3 = np.partition(col, -min(3, col.shape[1]), axis=1)[:, -min(3, col.shape[1]) :]
+            mean_top = top3.mean(axis=1) * (boost * 0.92)
+            blended = np.maximum(best, mean_top)
+            sims[:, tag_idx] = np.maximum(sims[:, tag_idx], blended)
         return sims
 
 
@@ -163,7 +168,11 @@ class FastClassifier:
             temperature=self.settings.softmax_temperature,
         )[0]
         scores = {self._tags[i]: float(probs[i]) for i in range(len(self._tags))}
-        tag, _conf, candidates = pick_tag(scores, whitelist=self._whitelist)
+        tag, _conf, candidates = pick_tag(
+            scores,
+            whitelist=self._whitelist,
+            apply_preset_rules=self._apply_preset_rules,
+        )
         top_prob, margin = confidence_from_probs(probs)
         review = needs_review(
             top_prob,
@@ -171,6 +180,8 @@ class FastClassifier:
             min_prob=self.settings.confidence_threshold,
             min_margin=self.settings.min_margin,
         )
+        if top_prob < 0.16 and margin < self.settings.min_margin:
+            review = True
         if tag == UNCATEGORIZED:
             top_prob = max(scores.values()) if scores else 0.0
             review = True
@@ -219,14 +230,12 @@ class FastClassifier:
         if not frames:
             return ClassificationResult(UNCATEGORIZED, [], 0.0, "no_frames", True, "")
         feats = self._embedder.encode_images(frames, micro_batch=self.settings.batch_size)
-        mean = feats.mean(axis=0, keepdims=True)
-        norm = float(np.linalg.norm(mean))
-        if norm > 1e-8:
-            mean = mean / norm
-        sims = self._raw_sims_batch(mean.astype(np.float32))
-        return self._result_from_sims_row(
-            sims[0], embedding_failed=_embedding_rows_failed(mean)[0]
-        )
+        if feats.shape[0] == 0:
+            return ClassificationResult(UNCATEGORIZED, [], 0.0, "no_feats", True, "")
+        sims_per_frame = self._raw_sims_batch(feats.astype(np.float32))
+        sims_row = sims_per_frame.max(axis=0)
+        failed = bool(_embedding_rows_failed(feats).any())
+        return self._result_from_sims_row(sims_row, embedding_failed=failed)
 
     def classify_batch(
         self,
