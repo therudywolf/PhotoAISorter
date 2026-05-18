@@ -15,9 +15,8 @@ from PIL import Image
 from app.fast_classify.config import FastClassifySettings
 from app.fast_classify.weights import (
     clip_cache_dir,
+    ensure_clip_weights_file,
     format_clip_load_error,
-    install_clip_download_patch,
-    resolve_pretrained_arg,
 )
 
 _model_lock = threading.Lock()
@@ -25,13 +24,12 @@ _shared: dict[str, Any] = {}
 
 
 def clip_available() -> bool:
-    try:
-        import open_clip  # noqa: F401
-        import torch  # noqa: F401
+    import importlib.util
 
-        return True
-    except ImportError:
-        return False
+    return (
+        importlib.util.find_spec("open_clip") is not None
+        and importlib.util.find_spec("torch") is not None
+    )
 
 
 def missing_clip_message() -> str:
@@ -45,7 +43,6 @@ class ClipEmbedder:
     def __init__(self, settings: FastClassifySettings, *, on_log: Callable[[str], None] | None = None) -> None:
         if not clip_available():
             raise ImportError(missing_clip_message())
-        install_clip_download_patch()
         import open_clip
         import torch
 
@@ -55,23 +52,30 @@ class ClipEmbedder:
         device = _resolve_device(settings.device, torch)
         is_cuda = device.type == "cuda"
         use_fp16 = bool(getattr(settings, "use_fp16", True)) and is_cuda
-        pretrained_arg = resolve_pretrained_arg(settings)
         cache_dir = str(clip_cache_dir())
+        weights_path, pre_cfg = ensure_clip_weights_file(settings, on_log=on_log)
         cache_key = (
-            f"{settings.model_name}:{pretrained_arg}:{device}:{use_fp16}:{cache_dir}"
+            f"{settings.model_name}:{weights_path}:{device}:{use_fp16}:{cache_dir}"
         )
         with _model_lock:
             if cache_key not in _shared:
                 if on_log:
                     on_log(
-                        f"CLIP: загрузка {settings.model_name} ({pretrained_arg}) "
+                        f"CLIP: инициализация {settings.model_name} "
                         f"на {device}{' fp16' if use_fp16 else ''}…"
                     )
+                load_kwargs: dict[str, Any] = {"cache_dir": cache_dir}
+                mean = pre_cfg.get("mean")
+                std = pre_cfg.get("std")
+                if mean is not None:
+                    load_kwargs["image_mean"] = mean
+                if std is not None:
+                    load_kwargs["image_std"] = std
                 try:
                     model, _, preprocess = open_clip.create_model_and_transforms(
                         settings.model_name,
-                        pretrained=pretrained_arg,
-                        cache_dir=cache_dir,
+                        pretrained=str(weights_path),
+                        **load_kwargs,
                     )
                 except Exception as e:
                     raise RuntimeError(format_clip_load_error(e)) from e
