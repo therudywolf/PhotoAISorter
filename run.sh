@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VENV_DIR=".venv-linux"
+VENV_DIR=".venv"
 LAUNCH_MODE="console"
 VENV_RECREATE_DONE=0
 IMPORT_REPAIR_DONE=0
@@ -10,17 +10,21 @@ IMPORT_REPAIR_DONE=0
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
 
-# Локальный ffmpeg рядом с проектом
+if [ -d ".venv-linux" ] && [ ! -d ".venv" ]; then
+    echo "[migrate] .venv-linux → .venv"
+    mv ".venv-linux" ".venv"
+fi
+
 if [ -d "ffmpeg-runtime/bin" ] && [ -x "ffmpeg-runtime/bin/ffmpeg" ]; then
     export PATH="$(pwd)/ffmpeg-runtime/bin:$PATH"
 fi
 
 show_help() {
     echo "Использование:"
-    echo "  ./START_Photo_AI_Sorter.sh           — создать/обновить .venv, зависимости, проверки, запуск GUI"
-    echo "  ./START_Photo_AI_Sorter.sh gui       — то же (GUI)"
-    echo "  ./START_Photo_AI_Sorter.sh test      — то же, затем pytest -q"
-    echo "  ./START_Photo_AI_Sorter.sh help      — эта справка"
+    echo "  ./run.sh           — создать/обновить .venv, зависимости, проверки, запуск GUI"
+    echo "  ./run.sh gui       — то же (GUI)"
+    echo "  ./run.sh test      — то же, затем pytest -q"
+    echo "  ./run.sh help      — эта справка"
     echo
     exit 0
 }

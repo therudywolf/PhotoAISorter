@@ -91,6 +91,8 @@ _MEDIA_MODE_VALUES = {v: k for k, v in _MEDIA_MODE_LABELS.items()}
 from app.tag_mode_ui import (
     CLIP_DEVICE_LABELS,
     CLIP_DEVICE_VALUES,
+    CLIP_QUALITY_LABELS,
+    CLIP_QUALITY_VALUES,
     FLEXIBLE_TAG_MODES,
     PRESET_TAG_MODES,
     TAG_MODE_LABELS as _TAG_MODE_LABELS,
@@ -209,12 +211,16 @@ class App(ctk.CTk):
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))
         self._review_first_var = ctk.BooleanVar(value=bool(saved.get("review_first_sort", False)))
 
-        from app.paths import migrate_app_state_to_project_tmp, migrate_roaming_clip_data
-
-        from app.paths import project_tmp_dir
+        from app.paths import (
+            migrate_app_state_to_project_tmp,
+            migrate_legacy_project_root,
+            migrate_roaming_clip_data,
+            project_tmp_dir,
+        )
 
         migrate_app_state_to_project_tmp()
         migrate_roaming_clip_data()
+        migrate_legacy_project_root()
         self._build()
         self._append_log(f"Кеш приложения: {project_tmp_dir()} (держите проект на SSD)")
         if self._interrupted_sort_sessions:
@@ -379,6 +385,20 @@ class App(ctk.CTk):
         )
         self._clip_device_seg.set(CLIP_DEVICE_LABELS[_dev_key])
         self._clip_device_seg.pack(side="left", padx=(0, 8))
+        self._clip_quality_row = ctk.CTkFrame(row_hybrid_opts, fg_color="transparent")
+        self._clip_quality_row.pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(self._clip_quality_row, text=t("folders.tag_mode.clip_quality"), width=52).pack(
+            side="left"
+        )
+        _q_key = _fc.quality if _fc.quality in CLIP_QUALITY_LABELS else "max"
+        self._clip_quality_var = ctk.StringVar(value=CLIP_QUALITY_LABELS[_q_key])
+        self._clip_quality_seg = ctk.CTkSegmentedButton(
+            self._clip_quality_row,
+            values=list(CLIP_QUALITY_LABELS.values()),
+            command=self._on_clip_quality_clicked,
+        )
+        self._clip_quality_seg.set(CLIP_QUALITY_LABELS[_q_key])
+        self._clip_quality_seg.pack(side="left")
         self._tag_mode_hint = ctk.CTkLabel(
             folders,
             text="",
@@ -663,10 +683,14 @@ class App(ctk.CTk):
         dev = "auto"
         if hasattr(self, "_clip_device_var"):
             dev = CLIP_DEVICE_VALUES.get(self._clip_device_var.get(), "auto")
+        quality = "max"
+        if hasattr(self, "_clip_quality_var"):
+            quality = CLIP_QUALITY_VALUES.get(self._clip_quality_var.get(), "max")
         self._tag_mode_hint.configure(
             text=build_tag_mode_hint(
                 self._tag_mode_var.get(),
                 clip_device=dev,
+                clip_quality=quality,
             )
         )
 
@@ -679,16 +703,25 @@ class App(ctk.CTk):
             self._hybrid_vlm_cb.pack(side="left", padx=(0, 12))
             if hasattr(self, "_clip_device_row"):
                 self._clip_device_row.pack(side="left")
+            if hasattr(self, "_clip_quality_row"):
+                self._clip_quality_row.pack(side="left", padx=(0, 8))
         else:
             self._hybrid_vlm_cb.pack_forget()
             if hasattr(self, "_clip_device_row"):
                 self._clip_device_row.pack_forget()
+            if hasattr(self, "_clip_quality_row"):
+                self._clip_quality_row.pack_forget()
 
     def _on_hybrid_option_changed(self) -> None:
         self._save_gui_settings()
 
     def _on_clip_device_clicked(self, label: str) -> None:
         self._clip_device_var.set(label)
+        self._update_tag_mode_hint()
+        self._save_gui_settings()
+
+    def _on_clip_quality_clicked(self, label: str) -> None:
+        self._clip_quality_var.set(label)
         self._update_tag_mode_hint()
         self._save_gui_settings()
 
@@ -816,6 +849,50 @@ class App(ctk.CTk):
                 text_color=("goldenrod", "#c9a227"),
             )
 
+    _FC_PROFILE_KEYS = (
+        "model_name",
+        "pretrained",
+        "batch_size",
+        "image_max_side",
+        "multi_crop",
+        "multi_crop_views",
+        "video_frames",
+        "prefetch_workers",
+        "confidence_threshold",
+        "min_margin",
+        "softmax_temperature",
+        "exemplar_boost",
+        "text_prompt_fusion",
+        "torch_compile",
+        "use_fp16",
+        "cache_embeddings",
+    )
+
+    def _fast_classify_gui_settings_block(self) -> dict:
+        """Persist GUI knobs; drop profile fields so quality tier can apply defaults."""
+        from app.settings_store import load_gui_settings
+
+        saved = load_gui_settings()
+        block: dict = {}
+        if isinstance(saved, dict) and isinstance(saved.get("fast_classify"), dict):
+            block = dict(saved["fast_classify"])
+        for key in self._FC_PROFILE_KEYS:
+            block.pop(key, None)
+        block["vlm_fallback"] = bool(self._hybrid_vlm_fallback_var.get())
+        block["device"] = (
+            CLIP_DEVICE_VALUES.get(self._clip_device_var.get(), "auto")
+            if hasattr(self, "_clip_device_var")
+            else "auto"
+        )
+        block["quality"] = (
+            CLIP_QUALITY_VALUES.get(self._clip_quality_var.get(), "max")
+            if hasattr(self, "_clip_quality_var")
+            else "max"
+        )
+        if block.get("weights_path"):
+            pass
+        return block
+
     def _save_gui_settings(self) -> None:
         try:
             dup: dict = {}
@@ -840,15 +917,7 @@ class App(ctk.CTk):
                         "dup_force_recompute_default": self._dup_force_recompute_default,
                     },
                     "duplicate_finder": dup,
-                    "fast_classify": {
-                        **load_fast_classify_settings().to_dict(),
-                        "vlm_fallback": bool(self._hybrid_vlm_fallback_var.get()),
-                        "device": CLIP_DEVICE_VALUES.get(
-                            self._clip_device_var.get(), "auto"
-                        )
-                        if hasattr(self, "_clip_device_var")
-                        else "auto",
-                    },
+                    "fast_classify": self._fast_classify_gui_settings_block(),
                 }
             )
             save_secret_settings({"lm_studio_api_key": self._api_key_resolved()})

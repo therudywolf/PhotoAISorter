@@ -121,9 +121,11 @@ def resolve_ffmpeg_executable() -> str | None:
             p = p / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
         if p.is_file():
             return str(p)
-    bundled = _PROJECT_ROOT / "ffmpeg-runtime" / "bin" / "ffmpeg.exe"
-    if bundled.is_file():
-        return str(bundled)
+    bundled = _PROJECT_ROOT / "ffmpeg-runtime" / "bin"
+    ff_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    bundled_exe = bundled / ff_name
+    if bundled_exe.is_file():
+        return str(bundled_exe)
     for exe in _PROJECT_ROOT.glob("ffmpeg-essentials/*/bin/ffmpeg.exe"):
         if exe.is_file():
             return str(exe)

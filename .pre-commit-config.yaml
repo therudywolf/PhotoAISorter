@@ -1,5 +1,4 @@
 # Run once per repo: pre-commit install
-# Or from Workspace root: .\install-secret-hooks.ps1
 
 repos:
   - repo: https://github.com/gitleaks/gitleaks

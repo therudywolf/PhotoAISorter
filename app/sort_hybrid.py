@@ -133,11 +133,18 @@ def run_hybrid_sort(
             )
             vlm_enabled = False
 
+    crop_note = (
+        f", multi-crop ×{settings.multi_crop_views}"
+        if settings.multi_crop
+        else ""
+    )
     worker._emit(
         {
             "type": "log",
             "text": (
-                f"Быстрая сортировка: CLIP батч {settings.batch_size}, "
+                f"Быстрая сортировка: качество={settings.quality}, "
+                f"{settings.model_name} @ {settings.image_max_side}px, "
+                f"батч {settings.batch_size}{crop_note}, "
                 f"порог {settings.confidence_threshold:.2f}, "
                 f"VLM fallback={'да' if vlm_enabled else 'нет'}."
             ),
@@ -207,7 +214,10 @@ def run_hybrid_sort(
             "use_video": use_video,
         }
 
-    prep_workers = max(1, min(8, int(getattr(worker, "workers", 3))))
+    prep_workers = max(
+        4,
+        min(16, int(getattr(worker, "workers", 3)) * 2),
+    )
     prep_done = 0
     with ThreadPoolExecutor(max_workers=prep_workers) as pool:
         futures = [pool.submit(_prepare_one, path) for path in files]

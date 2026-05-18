@@ -94,6 +94,18 @@ class ClipEmbedder:
                     except Exception:
                         pass
                 model.eval()
+                if (
+                    is_cuda
+                    and bool(getattr(settings, "torch_compile", True))
+                    and hasattr(torch, "compile")
+                ):
+                    try:
+                        model = torch.compile(model, mode="reduce-overhead")
+                        if on_log:
+                            on_log("CLIP: torch.compile включён (CUDA).")
+                    except Exception as e:
+                        if on_log:
+                            on_log(f"CLIP: torch.compile пропущен: {e}")
                 _shared[cache_key] = (model, preprocess, tokenizer, device, use_fp16)
             self._model, self._preprocess, self._tokenizer, self._device, self._fp16 = _shared[cache_key]
         self._is_cuda = is_cuda
@@ -124,8 +136,11 @@ class ClipEmbedder:
         if not images:
             return np.zeros((0, 0), dtype=np.float32)
         cap = max(1, min(1024, int(micro_batch)))
-        if self._is_cuda and cap < 64:
-            cap = 64
+        if self._is_cuda:
+            if "ViT-L" in self._settings.model_name and cap > 48:
+                cap = 48
+            elif cap < 32:
+                cap = 32
         chunks: list[np.ndarray] = []
         i = 0
         cur_cap = cap

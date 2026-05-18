@@ -103,7 +103,7 @@ def test_heuristic_short_circuits_clip(monkeypatch: object, tmp_path: Path) -> N
         prompts={"screenshot": "ui", "uncategorized": "x"},
         whitelist=wl,
     )
-    clf = FastClassifier(cfg, FastClassifySettings())
+    clf = FastClassifier(cfg, FastClassifySettings.from_dict(None))
     result = clf.classify_path(p)
     embedder.encode_images.assert_not_called()
     assert result.category == "screenshot"

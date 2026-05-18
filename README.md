@@ -106,7 +106,14 @@ python -m venv .venv
 .venv/Scripts/python main.py
 ```
 
-On Linux/macOS-style shells:
+On Linux/macOS:
+
+```bash
+chmod +x run.sh
+./run.sh
+```
+
+Or manually:
 
 ```bash
 python -m venv .venv
@@ -143,7 +150,9 @@ docker run --rm photo-ai-sorter:test
 
 ## Release Hygiene
 
-Publish from git, not by zipping the whole working directory. Local files such as `.env.local`, `local_presets.json`, `.venv`, `ffmpeg-runtime`, SQLite caches, review runs, and duplicate journals are intentionally ignored and can contain private data or bundled binaries.
+Publish from git, not by zipping the whole working directory. Local files such as `.env.local`, `tmp/`, `data/`, `.venv`, `ffmpeg-runtime`, SQLite caches, review runs, and duplicate journals are intentionally ignored and can contain private data or bundled binaries.
+
+See [docs/PROJECT_LAYOUT.md](docs/PROJECT_LAYOUT.md) for the full folder map.
 
 For a clean source archive:
 
@@ -181,7 +190,7 @@ Select a profile in the GUI's segmented button bar before starting a sort.
 
 ## Custom Tag Sets
 
-For personalized presets (e.g., recognizing your pet, specific people, niche categories), use the **Custom list** mode with user-defined tag sets stored locally in `context_tags.json` (gitignored). This way personal recognition context never leaves your machine or enters the repository.
+For personalized presets (e.g., recognizing your pet, specific people, niche categories), use the **Custom list** mode with user-defined tag sets stored locally in `tmp/app_state/context_tags.json` (gitignored). See [examples/context_tags.example.json](examples/context_tags.example.json). Personal recognition context never enters the repository.
 
 ## Sorting Modes
 
@@ -229,14 +238,14 @@ For hybrid **Fast CLIP** mode, virtual tag names (finer labels for the model) ca
 ### Fast CLIP (hybrid) mode
 
 1. Install optional deps: `pip install torch open-clip-torch` (included in `requirements.txt`).
-2. In the GUI, choose **Fast CLIP**, configure tags via **Tags…**, and add reference photos via **References…** (`refs/<tag>/` under app data).
+2. In the GUI, choose **Fast CLIP**, configure tags via **Tags…**, and add reference photos via **References…** (`data/refs/<tag>/`).
 3. Enable **VLM fallback** only for files CLIP marks as uncertain — keeps large runs fast.
 
 Tune thresholds in `gui_settings.json` → `fast_classify` (`confidence_threshold`, `min_margin`, `exemplar_boost`). That settings file is local and gitignored.
 
 ## Before you commit or push
 
-- Do **not** commit `local_presets.json`, `context_tags.json`, `category_aliases.json`, `gui_settings.json`, `refs/`, or SQLite databases — they are listed in `.gitignore`.
+- Do **not** commit `context_tags.json`, `category_aliases.json`, `gui_settings.json`, `tmp/`, `data/refs/`, `data/clip_weights/`, or SQLite databases — they are listed in `.gitignore`.
 - Run `python -m pytest -q` and `python -m compileall -q app tests main.py`.
 - Scan for secrets if you use [gitleaks](https://github.com/gitleaks/gitleaks): `gitleaks detect --source .` (optional).
 

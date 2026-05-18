@@ -39,6 +39,13 @@ CLIP_DEVICE_LABELS: dict[str, str] = {
 }
 CLIP_DEVICE_VALUES: dict[str, str] = {v: k for k, v in CLIP_DEVICE_LABELS.items()}
 
+CLIP_QUALITY_LABELS: dict[str, str] = {
+    "fast": "Быстро",
+    "balanced": "Баланс",
+    "max": "Макс",
+}
+CLIP_QUALITY_VALUES: dict[str, str] = {v: k for k, v in CLIP_QUALITY_LABELS.items()}
+
 
 def label_for_mode(mode: str) -> str:
     return TAG_MODE_LABELS.get(mode, TAG_MODE_LABELS["preset_sfw"])
@@ -69,6 +76,7 @@ def build_tag_mode_hint(
     *,
     clip_ready: bool | None = None,
     clip_device: str = "auto",
+    clip_quality: str = "max",
 ) -> str:
     if mode == "free":
         return t("folders.tag_mode.hint_free")
@@ -81,14 +89,33 @@ def build_tag_mode_hint(
         ready = clip_available() if clip_ready is None else clip_ready
         status = t("folders.tag_mode.hybrid_clip_ok" if ready else "folders.tag_mode.hybrid_clip_missing")
         dev_lbl = CLIP_DEVICE_LABELS.get(clip_device, CLIP_DEVICE_LABELS["auto"])
+        q_lbl = CLIP_QUALITY_LABELS.get(clip_quality, CLIP_QUALITY_LABELS["max"])
         cuda_line = clip_device_status_line()
+        model_line = ""
+        try:
+            from app.fast_classify.config import load_fast_classify_settings
+
+            fc = load_fast_classify_settings(
+                {
+                    "fast_classify": {
+                        "quality": clip_quality,
+                        "device": clip_device,
+                    }
+                }
+            )
+            crop = f", crop×{fc.multi_crop_views}" if fc.multi_crop else ""
+            model_line = (
+                f"Профиль «{q_lbl}»: {fc.model_name}, {fc.image_max_side}px{crop}."
+            )
+        except Exception:
+            model_line = f"Профиль качества: {q_lbl}."
         try:
             from app.paths import project_tmp_dir
 
             cache_line = f"Кеш: {project_tmp_dir()}"
         except Exception:
             cache_line = ""
-        extra = f"Устройство CLIP: {dev_lbl}."
+        extra = f"Устройство CLIP: {dev_lbl}. {model_line}"
         if cuda_line:
             extra = f"{extra} {cuda_line}"
         if cache_line:

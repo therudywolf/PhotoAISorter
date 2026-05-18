@@ -48,6 +48,7 @@ TEXTS: dict[str, str] = {
     "folders.tag_mode.refs": "Эталоны…",
     "folders.tag_mode.hybrid_vlm_fallback": "VLM fallback (LM Studio для сомнительных)",
     "folders.tag_mode.clip_device": "CLIP:",
+    "folders.tag_mode.clip_quality": "Качество:",
     "folders.tag_mode.hybrid_row_presets": "Пресеты",
     "folders.tag_mode.hybrid_row_modes": "Режимы",
     "folders.tags.dialog_title_preset": "Пресет — список папок для текущего профиля",

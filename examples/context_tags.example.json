@@ -1,0 +1,22 @@
+{
+  "active_set": "My library",
+  "sets": [
+    {
+      "name": "My library",
+      "tags": [
+        {
+          "key": "my_dog",
+          "description": "Black Labrador, friendly, often in park photos."
+        },
+        {
+          "key": "screenshot",
+          "description": "Phone or desktop UI capture, not a camera photo."
+        },
+        {
+          "key": "uncategorized",
+          "description": ""
+        }
+      ]
+    }
+  ]
+}

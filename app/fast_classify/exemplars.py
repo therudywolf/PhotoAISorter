@@ -35,7 +35,7 @@ Put a few clear photos in each subfolder (5–20 JPEG/PNG per tag):
   refs/my_dog/       — your black labrador
   refs/my_cat/       — your ginger fold cat
 
-Only folders that exist are used. forest (custom tag list) stays in context_tags.json.
+Only folders that exist are used. Tag lists live in tmp/app_state/context_tags.json.
 """
 
 

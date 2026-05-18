@@ -21,7 +21,7 @@ def test_ensure_clip_uses_cached_file(monkeypatch: object, tmp_path: Path) -> No
     cfg = {"url": "https://openaipublic.azureedge.net/x/abc/ViT-B-32.pt", "mean": (0.0,), "std": (1.0,)}
     monkeypatch.setattr(w, "_pretrained_cfg", lambda _s: cfg)
 
-    settings = FastClassifySettings()
+    settings = FastClassifySettings.from_dict({"model_name": "ViT-B-32", "quality": "fast"})
     path, pre = w.ensure_clip_weights_file(settings)
     assert path == big
     assert pre is cfg
@@ -42,7 +42,7 @@ def test_ensure_clip_downloads_via_url(monkeypatch: object, tmp_path: Path) -> N
 
     monkeypatch.setattr(w, "_download_url_quiet", fake_download)
 
-    settings = FastClassifySettings()
+    settings = FastClassifySettings.from_dict({"model_name": "ViT-B-32", "quality": "fast"})
     path, _ = w.ensure_clip_weights_file(settings)
     assert path.name == "ViT-B-32.pt"
     assert path.stat().st_size > w._MIN_OPENAI_VITB32_BYTES

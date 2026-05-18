@@ -98,4 +98,11 @@ def model_cache_key(settings) -> str:  # type: ignore[no-untyped-def]
     device = getattr(settings, "device", "auto")
     fp16 = int(bool(getattr(settings, "use_fp16", True)))
     side = int(getattr(settings, "image_max_side", 384))
-    return f"{settings.model_name}|{settings.pretrained}|{device}|fp16={fp16}|side={side}"
+    crops = int(getattr(settings, "multi_crop_views", 1))
+    if not getattr(settings, "multi_crop", False):
+        crops = 1
+    fusion = float(getattr(settings, "text_prompt_fusion", 0.68))
+    return (
+        f"{settings.model_name}|{settings.pretrained}|{device}|fp16={fp16}"
+        f"|side={side}|crops={crops}|tf={fusion:.2f}"
+    )

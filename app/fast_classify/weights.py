@@ -18,6 +18,15 @@ _patch_installed = False
 _MIN_OPENAI_VITB32_BYTES = 300_000_000
 
 
+def _min_weight_bytes(model_name: str) -> int:
+    name = (model_name or "").upper()
+    if "VIT-L" in name or "VIT-H" in name:
+        return 800_000_000
+    if "VIT-B-16" in name:
+        return 400_000_000
+    return _MIN_OPENAI_VITB32_BYTES
+
+
 def clip_cache_dir() -> Path:
     from app.paths import clip_weights_dir, migrate_app_state_to_project_tmp, migrate_roaming_clip_data
 
@@ -173,7 +182,8 @@ def ensure_clip_weights_file(
 
     filename = os.path.basename(url)
     dest = cache / filename
-    if dest.is_file() and dest.stat().st_size >= _MIN_OPENAI_VITB32_BYTES:
+    min_bytes = _min_weight_bytes(settings.model_name)
+    if dest.is_file() and dest.stat().st_size >= min_bytes:
         if on_log:
             on_log(f"CLIP: веса в кэше ({dest.name})")
         return dest, cfg

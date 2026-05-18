@@ -23,6 +23,7 @@ dependencies = [
   "send2trash>=1.8.3",
   "torch>=2.0.0",
   "open-clip-torch>=2.24.0",
+  "windnd>=1.0.4; sys_platform == 'win32'",
 ]
 
 [project.urls]
@@ -31,3 +32,4 @@ Source = "https://github.com/therudywolf/PhotoAISorter"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

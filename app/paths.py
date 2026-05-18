@@ -121,3 +121,35 @@ def migrate_app_state_to_project_tmp() -> None:
             shutil.copy2(old_clip, clip_embedding_cache_path())
         except OSError:
             pass
+
+
+def migrate_legacy_project_root() -> None:
+    """Move obsolete repo-root files into tmp/app_state and data/clip_weights."""
+    root = project_root()
+    legacy_presets = root / "local_presets.json"
+    dst_tags = app_state_dir() / "context_tags.json"
+    if legacy_presets.is_file() and not dst_tags.is_file():
+        try:
+            dst_tags.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy_presets, dst_tags)
+            backup = root / "local_presets.json.migrated"
+            if not backup.is_file():
+                legacy_presets.replace(backup)
+        except OSError:
+            pass
+    cache = root / ".cache"
+    if not cache.is_dir():
+        return
+    weights = clip_weights_dir()
+    weights.mkdir(parents=True, exist_ok=True)
+    for pt in cache.rglob("*.pt"):
+        if not pt.is_file():
+            continue
+        dest = weights / pt.name
+        if dest.is_file():
+            continue
+        try:
+            if pt.stat().st_size >= 1_000_000:
+                shutil.copy2(pt, dest)
+        except OSError:
+            pass
