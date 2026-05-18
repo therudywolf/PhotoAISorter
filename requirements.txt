@@ -8,3 +8,4 @@ numpy>=1.26.0
 send2trash>=1.8.3
 torch>=2.0.0
 open-clip-torch>=2.24.0
+windnd>=1.0.4; sys_platform == "win32"

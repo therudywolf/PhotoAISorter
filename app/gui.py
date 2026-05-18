@@ -89,6 +89,8 @@ _MEDIA_MODE_LABELS = {
 _MEDIA_MODE_VALUES = {v: k for k, v in _MEDIA_MODE_LABELS.items()}
 
 from app.tag_mode_ui import (
+    CLIP_DEVICE_LABELS,
+    CLIP_DEVICE_VALUES,
     FLEXIBLE_TAG_MODES,
     PRESET_TAG_MODES,
     TAG_MODE_LABELS as _TAG_MODE_LABELS,
@@ -355,7 +357,21 @@ class App(ctk.CTk):
             variable=self._hybrid_vlm_fallback_var,
             command=self._on_hybrid_option_changed,
         )
-        self._hybrid_vlm_cb.pack(side="left")
+        self._hybrid_vlm_cb.pack(side="left", padx=(0, 12))
+        self._clip_device_row = ctk.CTkFrame(row_hybrid_opts, fg_color="transparent")
+        self._clip_device_row.pack(side="left")
+        ctk.CTkLabel(self._clip_device_row, text=t("folders.tag_mode.clip_device"), width=44).pack(
+            side="left"
+        )
+        _dev_key = _fc.device if _fc.device in CLIP_DEVICE_LABELS else "auto"
+        self._clip_device_var = ctk.StringVar(value=CLIP_DEVICE_LABELS[_dev_key])
+        self._clip_device_seg = ctk.CTkSegmentedButton(
+            self._clip_device_row,
+            values=list(CLIP_DEVICE_LABELS.values()),
+            command=self._on_clip_device_clicked,
+        )
+        self._clip_device_seg.set(CLIP_DEVICE_LABELS[_dev_key])
+        self._clip_device_seg.pack(side="left", padx=(0, 8))
         self._tag_mode_hint = ctk.CTkLabel(
             folders,
             text="",
@@ -637,7 +653,15 @@ class App(ctk.CTk):
         self._update_hybrid_options_visibility()
 
     def _update_tag_mode_hint(self) -> None:
-        self._tag_mode_hint.configure(text=build_tag_mode_hint(self._tag_mode_var.get()))
+        dev = "auto"
+        if hasattr(self, "_clip_device_var"):
+            dev = CLIP_DEVICE_VALUES.get(self._clip_device_var.get(), "auto")
+        self._tag_mode_hint.configure(
+            text=build_tag_mode_hint(
+                self._tag_mode_var.get(),
+                clip_device=dev,
+            )
+        )
 
     def _update_refs_button(self) -> None:
         enabled = refs_button_enabled(self._tag_mode_var.get())
@@ -645,11 +669,20 @@ class App(ctk.CTk):
 
     def _update_hybrid_options_visibility(self) -> None:
         if self._tag_mode_var.get() == "hybrid":
-            self._hybrid_vlm_cb.pack(side="left")
+            self._hybrid_vlm_cb.pack(side="left", padx=(0, 12))
+            if hasattr(self, "_clip_device_row"):
+                self._clip_device_row.pack(side="left")
         else:
             self._hybrid_vlm_cb.pack_forget()
+            if hasattr(self, "_clip_device_row"):
+                self._clip_device_row.pack_forget()
 
     def _on_hybrid_option_changed(self) -> None:
+        self._save_gui_settings()
+
+    def _on_clip_device_clicked(self, label: str) -> None:
+        self._clip_device_var.set(label)
+        self._update_tag_mode_hint()
         self._save_gui_settings()
 
     def _show_canonical_tags_dialog(self) -> None:
@@ -803,6 +836,11 @@ class App(ctk.CTk):
                     "fast_classify": {
                         **load_fast_classify_settings().to_dict(),
                         "vlm_fallback": bool(self._hybrid_vlm_fallback_var.get()),
+                        "device": CLIP_DEVICE_VALUES.get(
+                            self._clip_device_var.get(), "auto"
+                        )
+                        if hasattr(self, "_clip_device_var")
+                        else "auto",
                     },
                 }
             )
@@ -1110,22 +1148,9 @@ class App(ctk.CTk):
         TagSetsDialog(self, on_save=self._refresh_context_display)
 
     def _open_refs_folder(self) -> None:
-        import os
-        import subprocess
-        import sys
+        from app.gui_exemplars import ExemplarsDialog
 
-        from app.fast_classify.exemplars import ensure_refs_layout
-
-        root = ensure_refs_layout(on_log=lambda m: self._append_log(m))
-        try:
-            if sys.platform == "win32":
-                os.startfile(root)  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.run(["open", str(root)], check=False)
-            else:
-                subprocess.run(["xdg-open", str(root)], check=False)
-        except OSError as e:
-            self._append_log(f"Не удалось открыть папку эталонов: {e}")
+        ExemplarsDialog(self, on_log=self._append_log)
 
     def _on_loaded_models(self) -> None:
         base = self._api_var.get().strip() or DEFAULT_API_BASE

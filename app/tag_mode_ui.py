@@ -32,6 +32,13 @@ FLEXIBLE_TAG_MODES: tuple[str, ...] = ("auto", "free", "custom", "hybrid")
 
 MODES_USING_CUSTOM_LIST: frozenset[str] = frozenset({"custom", "hybrid"})
 
+CLIP_DEVICE_LABELS: dict[str, str] = {
+    "auto": "Авто",
+    "cuda": "GPU",
+    "cpu": "CPU",
+}
+CLIP_DEVICE_VALUES: dict[str, str] = {v: k for k, v in CLIP_DEVICE_LABELS.items()}
+
 
 def label_for_mode(mode: str) -> str:
     return TAG_MODE_LABELS.get(mode, TAG_MODE_LABELS["preset_sfw"])
@@ -41,7 +48,28 @@ def mode_from_label(label: str) -> str | None:
     return TAG_MODE_VALUES.get(label)
 
 
-def build_tag_mode_hint(mode: str, *, clip_ready: bool | None = None) -> str:
+def clip_device_status_line() -> str:
+    """Short CUDA / CPU PyTorch status for hybrid hints."""
+    try:
+        import torch
+
+        ver = getattr(torch, "__version__", "?")
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            return f"PyTorch {ver}: GPU {name}"
+        if "+cpu" in str(ver):
+            return f"PyTorch {ver}: только CPU (для RTX: requirements-gpu.txt)"
+        return f"PyTorch {ver}: CUDA недоступна"
+    except Exception:
+        return ""
+
+
+def build_tag_mode_hint(
+    mode: str,
+    *,
+    clip_ready: bool | None = None,
+    clip_device: str = "auto",
+) -> str:
     if mode == "free":
         return t("folders.tag_mode.hint_free")
     if mode == "auto":
@@ -52,7 +80,12 @@ def build_tag_mode_hint(mode: str, *, clip_ready: bool | None = None) -> str:
         base = t("folders.tag_mode.hint_hybrid")
         ready = clip_available() if clip_ready is None else clip_ready
         status = t("folders.tag_mode.hybrid_clip_ok" if ready else "folders.tag_mode.hybrid_clip_missing")
-        return f"{base}\n{status}"
+        dev_lbl = CLIP_DEVICE_LABELS.get(clip_device, CLIP_DEVICE_LABELS["auto"])
+        cuda_line = clip_device_status_line()
+        extra = f"Устройство CLIP: {dev_lbl}."
+        if cuda_line:
+            extra = f"{extra} {cuda_line}"
+        return f"{base}\n{status}\n{extra}"
     return t("folders.tag_mode.hint_preset")
 
 

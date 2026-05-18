@@ -70,6 +70,21 @@ def install_clip_download_patch() -> None:
     pretrained_mod.download_pretrained = download_pretrained_robust
     factory_mod.download_pretrained = download_pretrained_robust
 
+    if not hasattr(factory_mod, "_load_state_dict_orig"):
+        factory_mod._load_state_dict_orig = factory_mod.load_state_dict
+
+    def load_state_dict_robust(
+        checkpoint_path: str,
+        device: str = "cpu",
+        weights_only: bool = True,
+    ) -> Any:
+        del weights_only
+        return factory_mod._load_state_dict_orig(
+            checkpoint_path, device=device, weights_only=False
+        )
+
+    factory_mod.load_state_dict = load_state_dict_robust
+
 
 def _pretrained_cfg(settings: FastClassifySettings) -> dict[str, Any]:
     from open_clip.pretrained import get_pretrained_cfg

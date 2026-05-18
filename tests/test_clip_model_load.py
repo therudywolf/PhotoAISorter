@@ -45,6 +45,7 @@ def test_create_model_uses_weights_only_false(monkeypatch: object, tmp_path: Pat
     )
     monkeypatch.setattr("open_clip.create_model_and_transforms", fake_create)
     monkeypatch.setattr("open_clip.get_tokenizer", lambda *_a: MagicMock())
+    monkeypatch.setattr("app.fast_classify.weights.install_clip_download_patch", lambda: None)
 
     ClipEmbedder(FastClassifySettings(), on_log=None)
     assert captured.get("weights_only") is False
