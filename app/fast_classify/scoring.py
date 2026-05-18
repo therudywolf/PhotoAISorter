@@ -10,6 +10,29 @@ import numpy as np
 from app.constants import UNCATEGORIZED
 
 
+def raw_similarity_margin(sims_row: np.ndarray) -> tuple[float, float]:
+    """Top cosine similarity and gap to second place (before softmax)."""
+    if sims_row.size == 0:
+        return 0.0, 0.0
+    order = np.argsort(-sims_row)
+    top = float(sims_row[order[0]])
+    second = float(sims_row[order[1]]) if sims_row.size > 1 else 0.0
+    return top, top - second
+
+
+def topk_softmax_probs(sims_row: np.ndarray, *, temperature: float, top_k: int = 10) -> np.ndarray:
+    """Softmax only among top-k cosine scores — avoids 60-way dilution on large tag lists."""
+    if sims_row.size == 0:
+        return sims_row
+    k = max(1, min(int(top_k), int(sims_row.size)))
+    idx = np.argpartition(sims_row, -k)[-k:]
+    sub = sims_row[idx].astype(np.float64, copy=False)
+    probs = softmax_probs(sub.reshape(1, -1), temperature=temperature)[0]
+    out = np.zeros(sims_row.shape[0], dtype=np.float32)
+    out[idx] = probs.astype(np.float32)
+    return out
+
+
 def softmax_probs(sims: np.ndarray, *, temperature: float) -> np.ndarray:
     """Row-wise softmax over cosine similarities."""
     if sims.size == 0:

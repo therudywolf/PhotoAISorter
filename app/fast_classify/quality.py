@@ -70,6 +70,9 @@ def finalize_fast_classify_settings(
             "text_prompt_fusion": 0.55,
             "text_prompt_max_pool": False,
             "crop_score_max_pool": False,
+            "min_raw_similarity": 0.17,
+            "min_raw_margin": 0.025,
+            "top_k_softmax": 8,
         }
     elif q == QUALITY_BALANCED:
         patch = {
@@ -89,6 +92,9 @@ def finalize_fast_classify_settings(
             "text_prompt_fusion": 0.62,
             "text_prompt_max_pool": False,
             "crop_score_max_pool": True,
+            "min_raw_similarity": 0.19,
+            "min_raw_margin": 0.03,
+            "top_k_softmax": 10,
         }
     elif q == QUALITY_MAX:
         patch = {
@@ -108,6 +114,9 @@ def finalize_fast_classify_settings(
             "text_prompt_fusion": 0.68,
             "text_prompt_max_pool": False,
             "crop_score_max_pool": True,
+            "min_raw_similarity": 0.20,
+            "min_raw_margin": 0.035,
+            "top_k_softmax": 12,
         }
     else:
         patch = {
@@ -127,6 +136,9 @@ def finalize_fast_classify_settings(
             "text_prompt_fusion": 0.75,
             "text_prompt_max_pool": True,
             "crop_score_max_pool": True,
+            "min_raw_similarity": 0.23,
+            "min_raw_margin": 0.04,
+            "top_k_softmax": 15,
         }
 
     for key in (
@@ -145,6 +157,9 @@ def finalize_fast_classify_settings(
         "text_prompt_fusion",
         "text_prompt_max_pool",
         "crop_score_max_pool",
+        "min_raw_similarity",
+        "min_raw_margin",
+        "top_k_softmax",
     ):
         if key in explicit:
             patch.pop(key, None)

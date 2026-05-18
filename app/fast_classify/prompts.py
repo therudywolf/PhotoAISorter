@@ -12,7 +12,7 @@ def clip_text_prompts_for_tag(tag: str, description: str) -> list[str]:
     desc = (description or label).strip()
     if len(desc) > 220:
         desc = desc[:217] + "..."
-    return [
+    base = [
         f"a photo of {label}. {desc}",
         f"a picture in category {tag}. {desc}",
         f"{desc} Category: {tag}.",
@@ -23,3 +23,11 @@ def clip_text_prompts_for_tag(tag: str, description: str) -> list[str]:
         f"the main subject matches: {desc}. Label {tag}.",
         f"изображение для сортировки в папку {tag}: {desc}",
     ]
+    if desc and desc.lower() != label.lower():
+        base.extend(
+            [
+                f"only choose {tag} if the image clearly shows: {desc}",
+                f"типичное содержимое папки {tag}: {desc}",
+            ]
+        )
+    return base

@@ -115,8 +115,16 @@ def build_custom_categories(tag_set: TagSet) -> tuple[str, ...]:
 
 
 def build_custom_prompts(tag_set: TagSet) -> dict[str, str]:
-    """Build category->description map from a TagSet (for the system prompt)."""
-    return {t.key: t.description for t in tag_set.tags if t.key and t.description}
+    """Build category->description map from a TagSet (every tag gets a CLIP description)."""
+    out: dict[str, str] = {}
+    for t in tag_set.tags:
+        if not t.key:
+            continue
+        desc = (t.description or "").strip()
+        if not desc:
+            desc = t.key.replace("_", " ")
+        out[t.key] = desc
+    return out
 
 
 def build_user_context_from_tags(tag_set: TagSet | None) -> str:

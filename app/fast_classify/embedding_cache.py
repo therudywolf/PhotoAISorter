@@ -104,7 +104,9 @@ def model_cache_key(settings) -> str:  # type: ignore[no-untyped-def]
     fusion = float(getattr(settings, "text_prompt_fusion", 0.68))
     tp_max = int(bool(getattr(settings, "text_prompt_max_pool", False)))
     crop_pool = int(bool(getattr(settings, "crop_score_max_pool", False)))
+    top_k = int(getattr(settings, "top_k_softmax", 10))
     return (
         f"{settings.model_name}|{settings.pretrained}|{device}|fp16={fp16}"
         f"|side={side}|crops={crops}|tf={fusion:.2f}|tpmax={tp_max}|cpool={crop_pool}"
+        f"|topk={top_k}"
     )

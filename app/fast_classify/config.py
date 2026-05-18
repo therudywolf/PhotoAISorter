@@ -44,6 +44,9 @@ class FastClassifySettings:
     prefetch_workers: int = 8
     video_frames: int = 9
     torch_compile: bool = True
+    min_raw_similarity: float = 0.21
+    min_raw_margin: float = 0.035
+    top_k_softmax: int = 12
     weights_path: str = ""
 
     @classmethod
@@ -84,6 +87,11 @@ class FastClassifySettings:
             prefetch_workers=max(1, min(16, int(raw.get("prefetch_workers", 8)))),
             video_frames=max(1, min(12, int(raw.get("video_frames", 9)))),
             torch_compile=bool(raw.get("torch_compile", True)),
+            min_raw_similarity=max(
+                0.05, min(0.45, float(raw.get("min_raw_similarity", 0.21)))
+            ),
+            min_raw_margin=max(0.005, min(0.2, float(raw.get("min_raw_margin", 0.035)))),
+            top_k_softmax=max(2, min(40, int(raw.get("top_k_softmax", 12)))),
             weights_path=str(raw.get("weights_path", "") or "").strip(),
         )
         return finalize_fast_classify_settings(s, explicit_keys=explicit)
@@ -111,6 +119,9 @@ class FastClassifySettings:
             "prefetch_workers": self.prefetch_workers,
             "video_frames": self.video_frames,
             "torch_compile": self.torch_compile,
+            "min_raw_similarity": self.min_raw_similarity,
+            "min_raw_margin": self.min_raw_margin,
+            "top_k_softmax": self.top_k_softmax,
             "weights_path": self.weights_path,
         }
 

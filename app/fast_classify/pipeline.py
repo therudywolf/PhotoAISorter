@@ -22,7 +22,12 @@ from app.fast_classify.heuristics import heuristic_tag
 from app.fast_classify.model import ClipEmbedder, clip_available, missing_clip_message
 from app.fast_classify.priority import pick_tag
 from app.fast_classify.prompts import clip_text_prompts_for_tag
-from app.fast_classify.scoring import confidence_from_probs, needs_review, softmax_probs
+from app.fast_classify.scoring import (
+    confidence_from_probs,
+    needs_review,
+    raw_similarity_margin,
+    topk_softmax_probs,
+)
 from app.images import load_image_rgb
 from app.tag_config import ResolvedTagConfig, TagMode
 
@@ -198,24 +203,42 @@ class FastClassifier:
             return ClassificationResult(
                 UNCATEGORIZED, [], 0.0, "clip_embed_failed", True, ""
             )
-        probs = softmax_probs(
-            sims_row.reshape(1, -1),
+        top_raw, raw_margin = raw_similarity_margin(sims_row)
+        min_raw = float(getattr(self.settings, "min_raw_similarity", 0.18))
+        min_raw_m = float(getattr(self.settings, "min_raw_margin", 0.03))
+        top_k = int(getattr(self.settings, "top_k_softmax", 10))
+
+        if top_raw < min_raw:
+            return ClassificationResult(
+                UNCATEGORIZED,
+                [],
+                max(0.0, top_raw),
+                f"clip_low_sim raw={top_raw:.2f}",
+                True,
+                "",
+            )
+
+        probs = topk_softmax_probs(
+            sims_row,
             temperature=self.settings.softmax_temperature,
-        )[0]
+            top_k=top_k,
+        )
         scores = {self._tags[i]: float(probs[i]) for i in range(len(self._tags))}
         tag, _conf, candidates = pick_tag(
             scores,
             whitelist=self._whitelist,
             apply_preset_rules=self._apply_preset_rules,
         )
-        top_prob, margin = confidence_from_probs(probs)
+        top_prob, prob_margin = confidence_from_probs(probs)
         review = needs_review(
             top_prob,
-            margin,
+            prob_margin,
             min_prob=self.settings.confidence_threshold,
             min_margin=self.settings.min_margin,
         )
-        if top_prob < 0.16 and margin < self.settings.min_margin:
+        if raw_margin < min_raw_m:
+            review = True
+        if top_prob < 0.16 and prob_margin < self.settings.min_margin:
             review = True
         if tag == UNCATEGORIZED:
             top_prob = max(scores.values()) if scores else 0.0
@@ -224,7 +247,7 @@ class FastClassifier:
             category=tag,
             candidates=candidates,
             confidence=min(1.0, max(0.0, top_prob)),
-            reason_short=f"clip_prob margin={margin:.2f}",
+            reason_short=f"clip raw={top_raw:.2f} margin={raw_margin:.2f}",
             needs_review=review,
             raw_text="",
         )
@@ -233,12 +256,14 @@ class FastClassifier:
         h = heuristic_tag(path, im, whitelist=self._whitelist)
         if h is not None:
             tag, conf, reason = h
+            auto_ok = conf >= 0.92
             return ClassificationResult(
                 category=tag,
                 candidates=[tag],
                 confidence=conf,
                 reason_short=f"heuristic:{reason}",
-                needs_review=needs_review(
+                needs_review=not auto_ok
+                or needs_review(
                     conf,
                     1.0 if conf >= 0.85 else 0.0,
                     min_prob=self.settings.confidence_threshold,
@@ -323,12 +348,14 @@ class FastClassifier:
             h = heuristic_tag(path, im, whitelist=self._whitelist)
             if h is not None:
                 tag, conf, reason = h
+                auto_ok = conf >= 0.92
                 results[i] = ClassificationResult(
                     category=tag,
                     candidates=[tag],
                     confidence=conf,
                     reason_short=f"heuristic:{reason}",
-                    needs_review=needs_review(
+                    needs_review=not auto_ok
+                    or needs_review(
                         conf,
                         1.0 if conf >= 0.85 else 0.0,
                         min_prob=self.settings.confidence_threshold,
