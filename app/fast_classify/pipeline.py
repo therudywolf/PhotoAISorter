@@ -43,12 +43,7 @@ class FastClassifier:
         self._tags = list(cfg.categories)
         self._embedder = ClipEmbedder(settings, on_log=on_log)
         ensure_refs_layout(on_log=on_log, extra_tags=cfg.categories)
-        (
-            self._text_matrix,
-            self._exemplar_matrix,
-            self._exemplar_tag_index,
-            self._exemplar_owner,
-        ) = self._build_feature_matrices()
+        self._text_matrix, self._exemplar_matrix, self._exemplar_owner = self._build_feature_matrices()
         self._cache: EmbeddingCache | None = None
         if getattr(settings, "cache_embeddings", True):
             try:
@@ -61,7 +56,7 @@ class FastClassifier:
                     on_log(f"CLIP cache отключён: {e}")
                 self._cache = None
         if on_log:
-            ex_count = int(np.sum(self._exemplar_tag_index >= 0))
+            ex_count = int(self._exemplar_matrix.shape[0])
             on_log(
                 f"CLIP готов: {len(self._tags)} классов, "
                 f"эталонов {ex_count}, устройство {self._embedder.device}"
@@ -84,7 +79,7 @@ class FastClassifier:
 
     def _build_feature_matrices(
         self,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         all_texts: list[str] = []
         spans: list[tuple[int, int]] = []
         for tag in self._tags:
@@ -133,14 +128,11 @@ class FastClassifier:
         else:
             exemplar_matrix = np.zeros((0, text_matrix.shape[1]), dtype=np.float32)
             exemplar_owner = np.zeros((0,), dtype=np.int32)
-        exemplar_tag_index = np.full(len(self._tags), -1, dtype=np.int32)
-        for col_owner in owner_idx:
-            exemplar_tag_index[col_owner] = 1
         if self._on_log and per_tag_count:
             head = ", ".join(f"{t}={n}" for t, n in per_tag_count[:8])
             tail = "" if len(per_tag_count) <= 8 else f" (+{len(per_tag_count) - 8} ещё)"
             self._on_log(f"Эталоны загружены: {head}{tail}")
-        return text_matrix, exemplar_matrix, exemplar_tag_index, exemplar_owner
+        return text_matrix, exemplar_matrix, exemplar_owner
 
     def _raw_sims_batch(self, feats: np.ndarray) -> np.ndarray:
         """Cosine similarity (B, num_tags). Per-tag exemplar boost = max similarity to any exemplar."""
@@ -159,7 +151,13 @@ class FastClassifier:
         return sims
 
 
-    def _result_from_sims_row(self, sims_row: np.ndarray) -> ClassificationResult:
+    def _result_from_sims_row(
+        self, sims_row: np.ndarray, *, embedding_failed: bool = False
+    ) -> ClassificationResult:
+        if embedding_failed:
+            return ClassificationResult(
+                UNCATEGORIZED, [], 0.0, "clip_embed_failed", True, ""
+            )
         probs = softmax_probs(
             sims_row.reshape(1, -1),
             temperature=self.settings.softmax_temperature,
@@ -203,8 +201,9 @@ class FastClassifier:
                 raw_text="",
             )
         feat = self._embedder.encode_images([im], micro_batch=1)
+        failed = _embedding_rows_failed(feat)
         sims = self._raw_sims_batch(feat)
-        return self._result_from_sims_row(sims[0])
+        return self._result_from_sims_row(sims[0], embedding_failed=failed[0])
 
     def classify_path(self, path: Path) -> ClassificationResult:
         im = load_image_rgb(path, max_side=self.settings.image_max_side)
@@ -225,7 +224,9 @@ class FastClassifier:
         if norm > 1e-8:
             mean = mean / norm
         sims = self._raw_sims_batch(mean.astype(np.float32))
-        return self._result_from_sims_row(sims[0])
+        return self._result_from_sims_row(
+            sims[0], embedding_failed=_embedding_rows_failed(mean)[0]
+        )
 
     def classify_batch(
         self,
@@ -278,8 +279,10 @@ class FastClassifier:
                 continue
             d = digests[i] if digests is not None and i < len(digests) else None
             if d and d in hits:
-                cached_feats[i] = hits[d]
-                continue
+                row = hits[d]
+                if float(np.linalg.norm(row)) > 1e-8:
+                    cached_feats[i] = row
+                    continue
             clip_indices.append(i)
             clip_images.append(im)
             clip_digests.append(d)
@@ -289,9 +292,10 @@ class FastClassifier:
             feats = self._embedder.encode_images(
                 clip_images, micro_batch=self.settings.batch_size
             )
+            embed_failed = _embedding_rows_failed(feats)
             for j, idx in enumerate(clip_indices):
                 d = clip_digests[j]
-                if d:
+                if d and not embed_failed[j]:
                     new_feats_to_store.append((d, feats[j]))
                 cached_feats[idx] = feats[j]
 
@@ -299,8 +303,11 @@ class FastClassifier:
             order = sorted(cached_feats.keys())
             stacked = np.stack([cached_feats[i] for i in order], axis=0)
             sims = self._raw_sims_batch(stacked)
+            failed_rows = _embedding_rows_failed(stacked)
             for k, idx in enumerate(order):
-                results[idx] = self._result_from_sims_row(sims[k])
+                results[idx] = self._result_from_sims_row(
+                    sims[k], embedding_failed=failed_rows[k]
+                )
 
         if new_feats_to_store and self._cache is not None:
             try:
@@ -315,6 +322,14 @@ class FastClassifier:
             else ClassificationResult(UNCATEGORIZED, [], 0.0, "missing", True, "")
             for r in results
         ]
+
+
+def _embedding_rows_failed(feats: np.ndarray) -> np.ndarray:
+    """True per row when the embedding vector is missing (zero norm after encode)."""
+    if feats.size == 0:
+        return np.zeros((0,), dtype=bool)
+    norms = np.linalg.norm(feats, axis=1)
+    return norms <= 1e-8
 
 
 def _reject_outlier_vectors(feats: np.ndarray, *, sigma: float = 2.0) -> np.ndarray:

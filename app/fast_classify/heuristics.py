@@ -11,7 +11,7 @@ from pathlib import Path
 from PIL import Image
 
 _SCREENSHOT_NAME_RE = re.compile(
-    r"(?i)(screenshot|screen[_-]?shot|screencap|capture d''écran|снимок экрана|скрин)"
+    r"(?i)(screenshot|screen[_-]?shot|screencap|capture d['']?écran|снимок экрана|скрин)"
 )
 _DOCUMENT_NAME_RE = re.compile(
     r"(?i)(scan|scanned|document|invoice|receipt|чек|квитанц|договор|contract)"

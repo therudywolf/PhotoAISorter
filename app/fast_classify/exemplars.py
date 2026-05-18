@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -69,6 +70,31 @@ def list_exemplar_paths(tag: str, *, limit: int = 48) -> list[Path]:
         if p.is_file() and p.suffix.lower() in STILL_IMAGE_EXTENSIONS:
             out.append(p)
     return out[:limit]
+
+
+def refs_fingerprint(*, extra_tags: Iterable[str] = ()) -> str:
+    """Stable hash of exemplar folders (file count + max mtime) for classifier cache keys."""
+    root = refs_dir()
+    tags: set[str] = set(DEFAULT_EXEMPLAR_TAGS)
+    tags.update(t for t in extra_tags if t)
+    parts: list[str] = []
+    for tag in sorted(tags):
+        folder = root / tag
+        if not folder.is_dir():
+            parts.append(f"{tag}:0:0")
+            continue
+        count = 0
+        mtime_max = 0
+        for p in folder.iterdir():
+            if p.is_file() and p.suffix.lower() in STILL_IMAGE_EXTENSIONS:
+                count += 1
+                try:
+                    mtime_max = max(mtime_max, int(p.stat().st_mtime_ns))
+                except OSError:
+                    pass
+        parts.append(f"{tag}:{count}:{mtime_max}")
+    raw = "|".join(parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def load_exemplar_images(

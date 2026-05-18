@@ -39,7 +39,9 @@ def confidence_from_probs(probs: np.ndarray) -> tuple[float, float]:
         return 0.0, 0.0
     order = np.argsort(-probs)
     top_p = float(probs[order[0]])
-    second_p = float(probs[order[1]]) if probs.size > 1 else 0.0
+    if probs.size == 1:
+        return top_p, top_p
+    second_p = float(probs[order[1]])
     return top_p, top_p - second_p
 
 

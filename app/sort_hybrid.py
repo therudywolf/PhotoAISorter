@@ -19,13 +19,65 @@ from app.classification_result import ClassificationResult
 from app.constants import GIF_EXTENSION, PIPELINE_VERSION, UNCATEGORIZED, VIDEO_EXTENSIONS
 from app.fast_classify import clip_available, load_fast_classify_settings, missing_clip_message
 from app.fast_classify.registry import get_classifier
-from app.images import file_sha256, image_to_jpeg_base64_data_uri
+from app.images import file_sha256, image_to_jpeg_base64_data_uri, video_contact_sheet_data_uri
 from app.lm_studio import chat_completion_cfg
 from app.video_frames import extract_frames_reduced, is_animated_gif
 from app.worker import has_disk_space_for_copy, unique_dest_path
 
 if TYPE_CHECKING:
     from app.worker import SortWorker
+
+
+def _merge_vlm_with_clip(
+    vlm: ClassificationResult,
+    clip: ClassificationResult,
+    *,
+    confidence_threshold: float,
+) -> ClassificationResult:
+    """Prefer CLIP when VLM is weaker or only CLIP failed review margin."""
+    if clip.category == UNCATEGORIZED:
+        return vlm
+    if vlm.category == UNCATEGORIZED:
+        return clip
+    if clip.confidence >= confidence_threshold:
+        if vlm.confidence < clip.confidence:
+            return clip
+        if clip.needs_review and not vlm.needs_review and vlm.confidence <= clip.confidence:
+            return clip
+    return vlm
+
+
+def _vlm_via_uri(
+    worker: SortWorker,
+    data_uri: str,
+    *,
+    video_hint: str,
+    _prompt_for_request: Callable[[], str],
+    _result_from_raw: Callable[[str], ClassificationResult],
+    _timed_api_call: Callable[[Callable[[], str]], str],
+    _get_api_base: Callable[[], str],
+    _timeout: Callable[[], tuple[float, float] | None],
+    on_retry: Callable[[str], None],
+) -> ClassificationResult:
+    extra = _prompt_for_request()
+    if video_hint:
+        extra = f"{extra}\n\n{video_hint}".strip() if extra else video_hint
+    raw = _timed_api_call(
+        lambda: chat_completion_cfg(
+            data_uri,
+            worker.tag_config,
+            api_base=_get_api_base(),
+            model=worker.model,
+            api_key=worker.api_key,
+            timeout=_timeout(),
+            on_retry=on_retry,
+            prompt_extra=extra,
+            structured_output=worker.structured_output,
+            temperature=worker.temperature,
+            max_tokens=worker.max_tokens,
+        )
+    )
+    return _result_from_raw(raw)
 
 
 def run_hybrid_sort(
@@ -143,29 +195,44 @@ def run_hybrid_sort(
             }
         )
 
-    def _vlm_classify(path: Path, *, video_hint: str = "") -> ClassificationResult:
+    def _vlm_classify(
+        path: Path,
+        *,
+        video_hint: str = "",
+        frames: list[Any] | None = None,
+    ) -> ClassificationResult:
         with metrics_lock:
             metrics["api_calls"] = int(metrics["api_calls"]) + 1
-        extra = _prompt_for_request()
-        if video_hint:
-            extra = f"{extra}\n\n{video_hint}".strip() if extra else video_hint
-        data_uri = image_to_jpeg_base64_data_uri(path)
-        raw = _timed_api_call(
-            lambda: chat_completion_cfg(
-                data_uri,
-                worker.tag_config,
-                api_base=_get_api_base(),
-                model=worker.model,
-                api_key=worker.api_key,
-                timeout=_timeout(),
-                on_retry=lambda msg: worker._emit({"type": "log", "text": msg}),
-                prompt_extra=extra,
-                structured_output=worker.structured_output,
-                temperature=worker.temperature,
-                max_tokens=worker.max_tokens,
+        if frames:
+            hint = (
+                "VIDEO MODE: The supplied image is a contact sheet made from chronological "
+                "frames of the video. Classify the entire video content, not a single frame."
             )
+            if video_hint:
+                hint = f"{video_hint}\n\n{hint}"
+            data_uri = video_contact_sheet_data_uri(frames)
+            return _vlm_via_uri(
+                worker,
+                data_uri,
+                video_hint=hint,
+                _prompt_for_request=_prompt_for_request,
+                _result_from_raw=_result_from_raw,
+                _timed_api_call=_timed_api_call,
+                _get_api_base=_get_api_base,
+                _timeout=_timeout,
+                on_retry=lambda msg: worker._emit({"type": "log", "text": msg}),
+            )
+        return _vlm_via_uri(
+            worker,
+            image_to_jpeg_base64_data_uri(path),
+            video_hint=video_hint,
+            _prompt_for_request=_prompt_for_request,
+            _result_from_raw=_result_from_raw,
+            _timed_api_call=_timed_api_call,
+            _get_api_base=_get_api_base,
+            _timeout=_timeout,
+            on_retry=lambda msg: worker._emit({"type": "log", "text": msg}),
         )
-        return _result_from_raw(raw)
 
     def _apply_item(item: dict[str, Any], result: ClassificationResult, *, via: str) -> None:
         t0 = time.monotonic()
@@ -322,19 +389,21 @@ def run_hybrid_sort(
                     for fut in as_completed(futures):
                         item, clip_res = futures[fut]
                         try:
-                            result = fut.result()
+                            vlm_res = fut.result()
                             with metrics_lock:
                                 metrics["vlm_fallback"] = int(metrics["vlm_fallback"]) + 1
-                            if (
-                                result.category == UNCATEGORIZED
-                                and clip_res.category != UNCATEGORIZED
-                            ) or (result.confidence < clip_res.confidence and clip_res.confidence >= settings.confidence_threshold):
-                                result = clip_res
+                            result = _merge_vlm_with_clip(
+                                vlm_res,
+                                clip_res,
+                                confidence_threshold=settings.confidence_threshold,
+                            )
+                            via = "vlm" if result is not clip_res else "clip"
                         except Exception as e:
                             _register_api_error(e)
                             result = clip_res
+                            via = "clip"
                         try:
-                            _apply_item(item, result, via="vlm")
+                            _apply_item(item, result, via=via)
                         except Exception as e:
                             worker._emit(
                                 {"type": "log", "text": f"apply error {item['path']}: {e!s}"}
@@ -369,33 +438,42 @@ def run_hybrid_sort(
 
             try:
                 if frames:
-                    result = fast.classify_video_frames(path, frames)
+                    clip_res = fast.classify_video_frames(path, frames)
                 else:
-                    result = ClassificationResult(
+                    clip_res = ClassificationResult(
                         UNCATEGORIZED, [], 0.0, "no_frames", True, ""
                     )
             except Exception as e:
                 worker._emit(
                     {"type": "log", "text": f"video clip error {path.name}: {e!s}"}
                 )
-                result = ClassificationResult(
+                clip_res = ClassificationResult(
                     UNCATEGORIZED, [], 0.0, "video_clip_error", True, ""
                 )
 
+            result = clip_res
+            via = "clip"
             if vlm_enabled and (
-                result.needs_review or result.category == UNCATEGORIZED
+                clip_res.needs_review or clip_res.category == UNCATEGORIZED
             ):
                 try:
-                    result = _vlm_classify(
+                    vlm_res = _vlm_classify(
                         path,
                         video_hint="VIDEO MODE: classify entire video content.",
+                        frames=frames if frames else None,
                     )
                     with metrics_lock:
                         metrics["vlm_fallback"] = int(metrics["vlm_fallback"]) + 1
+                    result = _merge_vlm_with_clip(
+                        vlm_res,
+                        clip_res,
+                        confidence_threshold=settings.confidence_threshold,
+                    )
+                    via = "vlm" if result is not clip_res else "clip"
                 except Exception as e:
                     _register_api_error(e)
             try:
-                _apply_item(item, result, via="clip")
+                _apply_item(item, result, via=via)
             except Exception as e:
                 worker._emit(
                     {"type": "log", "text": f"apply error {path}: {e!s}"}

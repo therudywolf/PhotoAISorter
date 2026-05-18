@@ -13,6 +13,12 @@ import numpy as np
 from PIL import Image
 
 from app.fast_classify.config import FastClassifySettings
+from app.fast_classify.weights import (
+    clip_cache_dir,
+    format_clip_load_error,
+    install_clip_download_patch,
+    resolve_pretrained_arg,
+)
 
 _model_lock = threading.Lock()
 _shared: dict[str, Any] = {}
@@ -39,6 +45,7 @@ class ClipEmbedder:
     def __init__(self, settings: FastClassifySettings, *, on_log: Callable[[str], None] | None = None) -> None:
         if not clip_available():
             raise ImportError(missing_clip_message())
+        install_clip_download_patch()
         import open_clip
         import torch
 
@@ -48,18 +55,26 @@ class ClipEmbedder:
         device = _resolve_device(settings.device, torch)
         is_cuda = device.type == "cuda"
         use_fp16 = bool(getattr(settings, "use_fp16", True)) and is_cuda
-        cache_key = f"{settings.model_name}:{settings.pretrained}:{device}:{use_fp16}"
+        pretrained_arg = resolve_pretrained_arg(settings)
+        cache_dir = str(clip_cache_dir())
+        cache_key = (
+            f"{settings.model_name}:{pretrained_arg}:{device}:{use_fp16}:{cache_dir}"
+        )
         with _model_lock:
             if cache_key not in _shared:
                 if on_log:
                     on_log(
-                        f"CLIP: загрузка {settings.model_name} ({settings.pretrained}) "
+                        f"CLIP: загрузка {settings.model_name} ({pretrained_arg}) "
                         f"на {device}{' fp16' if use_fp16 else ''}…"
                     )
-                model, _, preprocess = open_clip.create_model_and_transforms(
-                    settings.model_name,
-                    pretrained=settings.pretrained,
-                )
+                try:
+                    model, _, preprocess = open_clip.create_model_and_transforms(
+                        settings.model_name,
+                        pretrained=pretrained_arg,
+                        cache_dir=cache_dir,
+                    )
+                except Exception as e:
+                    raise RuntimeError(format_clip_load_error(e)) from e
                 tokenizer = open_clip.get_tokenizer(settings.model_name)
                 model = model.to(device)
                 if use_fp16:
@@ -142,12 +157,32 @@ class ClipEmbedder:
         return feats.detach().float().cpu().numpy().astype(np.float32)
 
     def _encode_batch_cpu_fallback(self, batch: list[Image.Image]) -> np.ndarray:
-        # Last-resort: return zero features so caller still gets a vector for these
-        # images. They will score low and be routed to VLM fallback / review.
+        """Encode on CPU when CUDA OOM at batch size 1 (shared model moved under global lock)."""
+        import torch
+
         if not batch:
             return np.zeros((0, self._text_dim()), dtype=np.float32)
-        dim = self._text_dim()
-        return np.zeros((len(batch), dim), dtype=np.float32)
+        if self._device.type == "cpu":
+            return self._encode_batch(batch)
+        with _model_lock:
+            cpu = torch.device("cpu")
+            was_fp16 = self._fp16
+            orig_device = self._device
+            try:
+                self._model = self._model.to(cpu)
+                if was_fp16:
+                    self._model = self._model.float()
+                self._device = cpu
+                self._is_cuda = False
+                self._fp16 = False
+                return self._encode_batch(batch)
+            finally:
+                self._model = self._model.to(orig_device)
+                if was_fp16 and orig_device.type == "cuda":
+                    self._model = self._model.half()
+                self._device = orig_device
+                self._is_cuda = orig_device.type == "cuda"
+                self._fp16 = was_fp16
 
     def _text_dim(self) -> int:
         # CLIP visual and text share the embedding dimension; probe via a tiny text encode.

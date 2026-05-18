@@ -32,6 +32,7 @@ class FastClassifySettings:
     cache_embeddings: bool = True
     prefetch_workers: int = 4
     video_frames: int = 3
+    weights_path: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> FastClassifySettings:
@@ -52,6 +53,7 @@ class FastClassifySettings:
             cache_embeddings=bool(raw.get("cache_embeddings", True)),
             prefetch_workers=max(1, min(16, int(raw.get("prefetch_workers", 4)))),
             video_frames=max(1, min(9, int(raw.get("video_frames", 3)))),
+            weights_path=str(raw.get("weights_path", "") or "").strip(),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +72,7 @@ class FastClassifySettings:
             "cache_embeddings": self.cache_embeddings,
             "prefetch_workers": self.prefetch_workers,
             "video_frames": self.video_frames,
+            "weights_path": self.weights_path,
         }
 
 

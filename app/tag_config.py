@@ -76,8 +76,10 @@ def resolve_tag_config(
             tag_store = load_tag_store()
         active = get_active_set(tag_store)
         if active and active.tags:
-            cats = build_custom_categories(active)
+            cats = _custom_categories_with_fallback(build_custom_categories(active))
             prompts = build_custom_prompts(active)
+            if UNCATEGORIZED not in prompts:
+                prompts = {**prompts, UNCATEGORIZED: "none of the listed categories"}
             return ResolvedTagConfig(
                 mode=mode,
                 categories=cats,
@@ -88,7 +90,7 @@ def resolve_tag_config(
                 whitelist=frozenset(cats) if cats else None,
                 profile=profile,
             )
-        return _fallback_config(profile, user_context_override)
+        return _empty_custom_config(mode, profile)
 
     ctx = user_context_override
     if not ctx and tag_store is not None:
@@ -134,15 +136,22 @@ def resolve_tag_config(
         )
 
 
-def _fallback_config(profile: SearchProfile = SearchProfile.SFW, user_context: str = "") -> ResolvedTagConfig:
-    cats = categories_for_profile(profile)
+def _custom_categories_with_fallback(cats: tuple[str, ...]) -> tuple[str, ...]:
+    """Ensure custom/hybrid lists always include uncategorized for low-confidence routing."""
+    if UNCATEGORIZED in cats:
+        return cats
+    return cats + (UNCATEGORIZED,)
+
+
+def _empty_custom_config(mode: TagMode, profile: SearchProfile) -> ResolvedTagConfig:
+    """Missing/empty active tag set — keep requested mode with no categories (GUI blocks start)."""
     return ResolvedTagConfig(
-        mode=TagMode.PRESET,
-        categories=cats,
-        prompts=CATEGORY_PROMPTS,
-        priority=TAG_MERGE_PRIORITY,
-        priority_rules_text=PRIORITY_RULES_BLOCK,
-        user_context=user_context,
-        whitelist=frozenset(cats),
+        mode=mode,
+        categories=(),
+        prompts={},
+        priority=(),
+        priority_rules_text="",
+        user_context="",
+        whitelist=frozenset(),
         profile=profile,
     )

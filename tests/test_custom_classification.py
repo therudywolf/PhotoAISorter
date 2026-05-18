@@ -83,7 +83,7 @@ def test_resolve_tag_config_custom_skips_duplicate_user_context() -> None:
     )
     cfg = resolve_tag_config(TagMode.CUSTOM, tag_store=store)
     assert cfg.user_context == ""
-    assert cfg.categories == ("iam", "my_dog")
+    assert cfg.categories == ("iam", "my_dog", "uncategorized")
     assert cfg.prompts["iam"] == "owner"
 
 

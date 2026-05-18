@@ -16,6 +16,6 @@ def test_resolve_hybrid_uses_active_tag_set() -> None:
     )
     cfg = resolve_tag_config(TagMode.HYBRID, tag_store=store)
     assert cfg.mode == TagMode.HYBRID
-    assert cfg.categories == ("iam", "my_dog")
+    assert cfg.categories == ("iam", "my_dog", "uncategorized")
     assert cfg.is_strict_whitelist
-    assert cfg.whitelist == frozenset({"iam", "my_dog"})
+    assert cfg.whitelist == frozenset({"iam", "my_dog", "uncategorized"})
