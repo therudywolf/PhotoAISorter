@@ -45,25 +45,43 @@ class ClipEmbedder:
         self._torch = torch
         self._settings = settings
         self._on_log = on_log
-        cache_key = f"{settings.model_name}:{settings.pretrained}"
+        device = _resolve_device(settings.device, torch)
+        is_cuda = device.type == "cuda"
+        use_fp16 = bool(getattr(settings, "use_fp16", True)) and is_cuda
+        cache_key = f"{settings.model_name}:{settings.pretrained}:{device}:{use_fp16}"
         with _model_lock:
             if cache_key not in _shared:
                 if on_log:
-                    on_log(f"CLIP: загрузка {settings.model_name} ({settings.pretrained})…")
+                    on_log(
+                        f"CLIP: загрузка {settings.model_name} ({settings.pretrained}) "
+                        f"на {device}{' fp16' if use_fp16 else ''}…"
+                    )
                 model, _, preprocess = open_clip.create_model_and_transforms(
                     settings.model_name,
                     pretrained=settings.pretrained,
                 )
                 tokenizer = open_clip.get_tokenizer(settings.model_name)
-                device = _resolve_device(settings.device, torch)
                 model = model.to(device)
+                if use_fp16:
+                    model = model.half()
+                if is_cuda:
+                    try:
+                        model = model.to(memory_format=torch.channels_last)
+                    except Exception:
+                        pass
                 model.eval()
-                _shared[cache_key] = (model, preprocess, tokenizer, device)
-            self._model, self._preprocess, self._tokenizer, self._device = _shared[cache_key]
+                _shared[cache_key] = (model, preprocess, tokenizer, device, use_fp16)
+            self._model, self._preprocess, self._tokenizer, self._device, self._fp16 = _shared[cache_key]
+        self._is_cuda = is_cuda
+        self._embed_dtype = torch.float16 if self._fp16 else torch.float32
 
     @property
     def device(self) -> str:
         return str(self._device)
+
+    @property
+    def use_fp16(self) -> bool:
+        return bool(self._fp16)
 
     def encode_texts(self, texts: list[str]) -> np.ndarray:
         import torch
@@ -71,27 +89,35 @@ class ClipEmbedder:
         tokens = self._tokenizer(texts)
         if tokens.device.type != self._device.type:
             tokens = tokens.to(self._device)
-        with torch.no_grad():
+        with torch.inference_mode():
             feats = self._model.encode_text(tokens)
             feats = feats / feats.norm(dim=-1, keepdim=True)
-        return feats.detach().cpu().numpy().astype(np.float32)
+        return feats.detach().float().cpu().numpy().astype(np.float32)
 
     def encode_images(self, images: list[Image.Image], *, micro_batch: int = 64) -> np.ndarray:
         import torch
 
         if not images:
             return np.zeros((0, 0), dtype=np.float32)
-        cap = max(1, min(256, int(micro_batch)))
+        cap = max(1, min(1024, int(micro_batch)))
+        if self._is_cuda and cap < 64:
+            cap = 64
         chunks: list[np.ndarray] = []
         for start in range(0, len(images), cap):
             batch = images[start : start + cap]
             tensors = torch.stack([self._preprocess(im) for im in batch])
-            if tensors.device.type != self._device.type:
+            if self._is_cuda:
+                tensors = tensors.pin_memory()
+                tensors = tensors.to(self._device, non_blocking=True)
+                tensors = tensors.to(memory_format=torch.channels_last)
+            else:
                 tensors = tensors.to(self._device)
-            with torch.no_grad():
+            if self._fp16:
+                tensors = tensors.half()
+            with torch.inference_mode():
                 feats = self._model.encode_image(tensors)
                 feats = feats / feats.norm(dim=-1, keepdim=True)
-            chunks.append(feats.detach().cpu().numpy().astype(np.float32))
+            chunks.append(feats.detach().float().cpu().numpy().astype(np.float32))
         return np.vstack(chunks)
 
 

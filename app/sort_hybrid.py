@@ -233,9 +233,10 @@ def run_hybrid_sort(
             break
         chunk = still[offset : offset + batch_size]
         paths = [x["path"] for x in chunk]
+        digests = [x["digest"] for x in chunk]
         if paths:
             worker._emit({"type": "current", "path": str(paths[0])})
-        results = fast.classify_batch(paths)
+        results = fast.classify_batch(paths, digests=digests)
         with metrics_lock:
             metrics["fast_classify"] = int(metrics["fast_classify"]) + len(chunk)
 
@@ -273,11 +274,12 @@ def run_hybrid_sort(
         path = item["path"]
         worker._emit({"type": "current", "path": str(path)})
         try:
+            n_frames = max(1, int(getattr(settings, "video_frames", 3)))
             frames = extract_frames_reduced(
-                path, 1, on_log=lambda m: worker._emit({"type": "log", "text": m})
+                path, n_frames, on_log=lambda m: worker._emit({"type": "log", "text": m})
             )
             if frames:
-                result = fast.classify_image(path, frames[len(frames) // 2])
+                result = fast.classify_video_frames(path, frames)
             else:
                 result = ClassificationResult(UNCATEGORIZED, [], 0.0, "no_frames", True, "")
         except Exception as e:

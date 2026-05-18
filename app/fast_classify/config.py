@@ -20,7 +20,7 @@ def refs_dir() -> Path:
 class FastClassifySettings:
     model_name: str = "ViT-B-32"
     pretrained: str = "openai"
-    batch_size: int = 32
+    batch_size: int = 64
     image_max_side: int = 384
     confidence_threshold: float = 0.28
     min_margin: float = 0.06
@@ -28,6 +28,10 @@ class FastClassifySettings:
     vlm_fallback: bool = True
     exemplar_boost: float = 1.15
     device: str = "auto"
+    use_fp16: bool = True
+    cache_embeddings: bool = True
+    prefetch_workers: int = 4
+    video_frames: int = 3
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> FastClassifySettings:
@@ -36,7 +40,7 @@ class FastClassifySettings:
         return cls(
             model_name=str(raw.get("model_name", "ViT-B-32") or "ViT-B-32"),
             pretrained=str(raw.get("pretrained", "openai") or "openai"),
-            batch_size=max(1, min(128, int(raw.get("batch_size", 32)))),
+            batch_size=max(1, min(512, int(raw.get("batch_size", 64)))),
             image_max_side=max(128, min(768, int(raw.get("image_max_side", 384)))),
             confidence_threshold=max(0.05, min(0.95, float(raw.get("confidence_threshold", 0.28)))),
             min_margin=max(0.01, min(0.5, float(raw.get("min_margin", 0.06)))),
@@ -44,6 +48,10 @@ class FastClassifySettings:
             vlm_fallback=bool(raw.get("vlm_fallback", True)),
             exemplar_boost=max(1.0, min(2.0, float(raw.get("exemplar_boost", 1.15)))),
             device=str(raw.get("device", "auto") or "auto"),
+            use_fp16=bool(raw.get("use_fp16", True)),
+            cache_embeddings=bool(raw.get("cache_embeddings", True)),
+            prefetch_workers=max(1, min(16, int(raw.get("prefetch_workers", 4)))),
+            video_frames=max(1, min(9, int(raw.get("video_frames", 3)))),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -58,6 +66,10 @@ class FastClassifySettings:
             "vlm_fallback": self.vlm_fallback,
             "exemplar_boost": self.exemplar_boost,
             "device": self.device,
+            "use_fp16": self.use_fp16,
+            "cache_embeddings": self.cache_embeddings,
+            "prefetch_workers": self.prefetch_workers,
+            "video_frames": self.video_frames,
         }
 
 

@@ -15,6 +15,7 @@ from PIL import Image
 from app.classification_result import ClassificationResult
 from app.constants import UNCATEGORIZED
 from app.fast_classify.config import FastClassifySettings
+from app.fast_classify.embedding_cache import EmbeddingCache, model_cache_key
 from app.fast_classify.exemplars import ensure_refs_layout, list_exemplar_paths, load_exemplar_images
 from app.fast_classify.heuristics import heuristic_tag
 from app.fast_classify.model import ClipEmbedder, clip_available, missing_clip_message
@@ -43,6 +44,17 @@ class FastClassifier:
         self._embedder = ClipEmbedder(settings, on_log=on_log)
         ensure_refs_layout(on_log=on_log)
         self._text_matrix, self._exemplar_matrix, self._exemplar_tag_index = self._build_feature_matrices()
+        self._cache: EmbeddingCache | None = None
+        if getattr(settings, "cache_embeddings", True):
+            try:
+                self._cache = EmbeddingCache(
+                    model_key=model_cache_key(settings),
+                    image_max_side=settings.image_max_side,
+                )
+            except Exception as e:
+                if on_log:
+                    on_log(f"CLIP cache отключён: {e}")
+                self._cache = None
         if on_log:
             ex_count = int(np.sum(self._exemplar_tag_index >= 0))
             on_log(
@@ -177,16 +189,43 @@ class FastClassifier:
         except OSError as e:
             return path, None, str(e)
 
-    def classify_batch(self, paths: list[Path]) -> list[ClassificationResult]:
+    def classify_video_frames(self, path: Path, frames: list[Image.Image]) -> ClassificationResult:
+        if not frames:
+            return ClassificationResult(UNCATEGORIZED, [], 0.0, "no_frames", True, "")
+        feats = self._embedder.encode_images(frames, micro_batch=self.settings.batch_size)
+        mean = feats.mean(axis=0, keepdims=True)
+        norm = float(np.linalg.norm(mean))
+        if norm > 1e-8:
+            mean = mean / norm
+        sims = self._raw_sims_batch(mean.astype(np.float32))
+        return self._result_from_sims_row(sims[0])
+
+    def classify_batch(
+        self,
+        paths: list[Path],
+        *,
+        digests: list[str] | None = None,
+    ) -> list[ClassificationResult]:
         if not paths:
             return []
         results: list[ClassificationResult | None] = [None] * len(paths)
         clip_indices: list[int] = []
         clip_images: list[Image.Image] = []
+        clip_digests: list[str | None] = []
+        cached_feats: dict[int, np.ndarray] = {}
 
-        workers = min(8, max(1, len(paths)))
+        workers = min(max(1, self.settings.prefetch_workers), max(1, len(paths)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             loaded = list(pool.map(self._load_image, paths))
+
+        digest_lookup: dict[str, list[int]] = {}
+        if digests is not None and self._cache is not None and len(digests) == len(paths):
+            for i, d in enumerate(digests):
+                if d:
+                    digest_lookup.setdefault(d, []).append(i)
+            hits = self._cache.get_many(list(digest_lookup.keys()))
+        else:
+            hits = {}
 
         for i, (path, im, err) in enumerate(loaded):
             if err is not None:
@@ -210,16 +249,38 @@ class FastClassifier:
                     raw_text="",
                 )
                 continue
+            d = digests[i] if digests is not None and i < len(digests) else None
+            if d and d in hits:
+                cached_feats[i] = hits[d]
+                continue
             clip_indices.append(i)
             clip_images.append(im)
+            clip_digests.append(d)
 
+        new_feats_to_store: list[tuple[str, np.ndarray]] = []
         if clip_images:
             feats = self._embedder.encode_images(
                 clip_images, micro_batch=self.settings.batch_size
             )
-            sims = self._raw_sims_batch(feats)
             for j, idx in enumerate(clip_indices):
-                results[idx] = self._result_from_sims_row(sims[j])
+                d = clip_digests[j]
+                if d:
+                    new_feats_to_store.append((d, feats[j]))
+                cached_feats[idx] = feats[j]
+
+        if cached_feats:
+            order = sorted(cached_feats.keys())
+            stacked = np.stack([cached_feats[i] for i in order], axis=0)
+            sims = self._raw_sims_batch(stacked)
+            for k, idx in enumerate(order):
+                results[idx] = self._result_from_sims_row(sims[k])
+
+        if new_feats_to_store and self._cache is not None:
+            try:
+                self._cache.put_many(new_feats_to_store)
+            except Exception as e:
+                if self._on_log:
+                    self._on_log(f"CLIP cache write failed: {e}")
 
         return [
             r

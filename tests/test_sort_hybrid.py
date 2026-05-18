@@ -52,7 +52,7 @@ def test_sort_hybrid_copies_clip_result(tmp_path: Path, monkeypatch: object) -> 
     (src / "photo.jpg").write_bytes(b"x")
 
     class _FakeFast:
-        def classify_batch(self, paths: list[Path]) -> list[ClassificationResult]:
+        def classify_batch(self, paths: list[Path], *, digests=None) -> list[ClassificationResult]:
             return [
                 ClassificationResult("cat", ["cat"], 0.9, "clip_similarity", False, "")
                 for _ in paths
