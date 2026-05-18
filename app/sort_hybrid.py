@@ -11,6 +11,8 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 from app.category_aliases import resolve_storage_category
 from app.classification_result import ClassificationResult
@@ -62,13 +64,27 @@ def run_hybrid_sort(
     metrics["fast_classify"] = 0
     metrics["vlm_fallback"] = 0
 
+    vlm_enabled = bool(settings.vlm_fallback)
+    if vlm_enabled:
+        if not _probe_lm_studio(_get_api_base(), timeout=2.5):
+            worker._emit(
+                {
+                    "type": "log",
+                    "text": (
+                        "LM Studio недоступен — VLM-фоллбэк отключён на эту сессию. "
+                        "Сомнительные снимки уйдут в review."
+                    ),
+                }
+            )
+            vlm_enabled = False
+
     worker._emit(
         {
             "type": "log",
             "text": (
                 f"Быстрая сортировка: CLIP батч {settings.batch_size}, "
                 f"порог {settings.confidence_threshold:.2f}, "
-                f"VLM fallback={'да' if settings.vlm_fallback else 'нет'}."
+                f"VLM fallback={'да' if vlm_enabled else 'нет'}."
             ),
         }
     )
@@ -227,75 +243,177 @@ def run_hybrid_sort(
     still = [x for x in pending if not x["use_video"]]
     videos = [x for x in pending if x["use_video"]]
     batch_size = settings.batch_size
+    video_timeout_s = 90.0
 
-    for offset in range(0, len(still), batch_size):
-        if worker._stop.is_set():
-            break
-        chunk = still[offset : offset + batch_size]
-        paths = [x["path"] for x in chunk]
-        digests = [x["digest"] for x in chunk]
-        if paths:
-            worker._emit({"type": "current", "path": str(paths[0])})
-        results = fast.classify_batch(paths, digests=digests)
+    last_progress_ts = time.monotonic()
+
+    def _maybe_progress() -> None:
+        nonlocal last_progress_ts
+        now = time.monotonic()
+        if now - last_progress_ts < 10.0:
+            return
+        last_progress_ts = now
         with metrics_lock:
-            metrics["fast_classify"] = int(metrics["fast_classify"]) + len(chunk)
+            done = int(metrics.get("fast_classify", 0))
+            vlm = int(metrics.get("vlm_fallback", 0))
+            review = int(metrics.get("needs_review", 0))
+        total = len(still) + len(videos)
+        worker._emit(
+            {
+                "type": "log",
+                "text": (
+                    f"Прогресс: {done}/{total} CLIP, VLM {vlm}, review {review}"
+                ),
+            }
+        )
 
-        vlm_items: list[tuple[dict[str, Any], ClassificationResult]] = []
-        for item, result in zip(chunk, results):
-            if settings.vlm_fallback and (
+    try:
+        for offset in range(0, len(still), batch_size):
+            if worker._stop.is_set():
+                break
+            if not worker._wait_if_paused():
+                break
+            chunk = still[offset : offset + batch_size]
+            paths = [x["path"] for x in chunk]
+            digests = [x["digest"] for x in chunk]
+            if paths:
+                worker._emit({"type": "current", "path": str(paths[0])})
+            try:
+                results = fast.classify_batch(paths, digests=digests)
+            except Exception as e:
+                worker._emit(
+                    {
+                        "type": "log",
+                        "text": f"CLIP batch error: {e!s} — батч пропущен, файлы в review",
+                    }
+                )
+                results = [
+                    ClassificationResult(UNCATEGORIZED, [], 0.0, "batch_error", True, "")
+                    for _ in chunk
+                ]
+            with metrics_lock:
+                metrics["fast_classify"] = int(metrics["fast_classify"]) + len(chunk)
+
+            vlm_items: list[tuple[dict[str, Any], ClassificationResult]] = []
+            for item, result in zip(chunk, results):
+                if vlm_enabled and (
+                    result.needs_review or result.category == UNCATEGORIZED
+                ):
+                    vlm_items.append((item, result))
+                else:
+                    try:
+                        _apply_item(item, result, via="clip")
+                    except Exception as e:
+                        worker._emit(
+                            {"type": "log", "text": f"apply error {item['path']}: {e!s}"}
+                        )
+
+            if vlm_items and vlm_enabled:
+                with ThreadPoolExecutor(max_workers=max(1, worker.api_workers)) as pool:
+                    futures = {
+                        pool.submit(_vlm_classify, it["path"]): (it, clip_res)
+                        for it, clip_res in vlm_items
+                    }
+                    for fut in as_completed(futures):
+                        item, clip_res = futures[fut]
+                        try:
+                            result = fut.result()
+                            with metrics_lock:
+                                metrics["vlm_fallback"] = int(metrics["vlm_fallback"]) + 1
+                            if (
+                                result.category == UNCATEGORIZED
+                                and clip_res.category != UNCATEGORIZED
+                            ) or (result.confidence < clip_res.confidence and clip_res.confidence >= settings.confidence_threshold):
+                                result = clip_res
+                        except Exception as e:
+                            _register_api_error(e)
+                            result = clip_res
+                        try:
+                            _apply_item(item, result, via="vlm")
+                        except Exception as e:
+                            worker._emit(
+                                {"type": "log", "text": f"apply error {item['path']}: {e!s}"}
+                            )
+
+            with worker.db._lock:
+                worker.db._maybe_commit(force=True)
+            _maybe_progress()
+
+        for item in videos:
+            if worker._stop.is_set():
+                break
+            if not worker._wait_if_paused():
+                break
+            path = item["path"]
+            worker._emit({"type": "current", "path": str(path)})
+            n_frames = max(1, int(getattr(settings, "video_frames", 3)))
+            frames: list[Any] = []
+            try:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    fut = pool.submit(
+                        extract_frames_reduced,
+                        path,
+                        n_frames,
+                        on_log=lambda m: worker._emit({"type": "log", "text": m}),
+                    )
+                    frames = fut.result(timeout=video_timeout_s) or []
+            except Exception as e:
+                worker._emit(
+                    {"type": "log", "text": f"video frame error {path.name}: {e!s}"}
+                )
+
+            try:
+                if frames:
+                    result = fast.classify_video_frames(path, frames)
+                else:
+                    result = ClassificationResult(
+                        UNCATEGORIZED, [], 0.0, "no_frames", True, ""
+                    )
+            except Exception as e:
+                worker._emit(
+                    {"type": "log", "text": f"video clip error {path.name}: {e!s}"}
+                )
+                result = ClassificationResult(
+                    UNCATEGORIZED, [], 0.0, "video_clip_error", True, ""
+                )
+
+            if vlm_enabled and (
                 result.needs_review or result.category == UNCATEGORIZED
             ):
-                vlm_items.append((item, result))
-            else:
-                _apply_item(item, result, via="clip")
-
-        if vlm_items and settings.vlm_fallback:
-            with ThreadPoolExecutor(max_workers=max(1, worker.api_workers)) as pool:
-                futures = {
-                    pool.submit(_vlm_classify, it["path"]): (it, clip_res)
-                    for it, clip_res in vlm_items
-                }
-                for fut in as_completed(futures):
-                    item, clip_res = futures[fut]
-                    try:
-                        result = fut.result()
-                        with metrics_lock:
-                            metrics["vlm_fallback"] = int(metrics["vlm_fallback"]) + 1
-                        if result.category == UNCATEGORIZED and clip_res.category != UNCATEGORIZED:
-                            result = clip_res
-                    except Exception as e:
-                        _register_api_error(e)
-                        result = clip_res
-                    _apply_item(item, result, via="vlm")
-
-    for item in videos:
-        if worker._stop.is_set():
-            break
-        path = item["path"]
-        worker._emit({"type": "current", "path": str(path)})
-        try:
-            n_frames = max(1, int(getattr(settings, "video_frames", 3)))
-            frames = extract_frames_reduced(
-                path, n_frames, on_log=lambda m: worker._emit({"type": "log", "text": m})
-            )
-            if frames:
-                result = fast.classify_video_frames(path, frames)
-            else:
-                result = ClassificationResult(UNCATEGORIZED, [], 0.0, "no_frames", True, "")
-        except Exception as e:
-            worker._emit({"type": "log", "text": f"video frame error {path.name}: {e!s}"})
-            result = ClassificationResult(UNCATEGORIZED, [], 0.0, "video_error", True, "")
-
-        if settings.vlm_fallback and (
-            result.needs_review or result.category == UNCATEGORIZED
-        ):
+                try:
+                    result = _vlm_classify(
+                        path,
+                        video_hint="VIDEO MODE: classify entire video content.",
+                    )
+                    with metrics_lock:
+                        metrics["vlm_fallback"] = int(metrics["vlm_fallback"]) + 1
+                except Exception as e:
+                    _register_api_error(e)
             try:
-                result = _vlm_classify(
-                    path,
-                    video_hint="VIDEO MODE: classify entire video content.",
-                )
-                with metrics_lock:
-                    metrics["vlm_fallback"] = int(metrics["vlm_fallback"]) + 1
+                _apply_item(item, result, via="clip")
             except Exception as e:
-                _register_api_error(e)
-        _apply_item(item, result, via="clip")
+                worker._emit(
+                    {"type": "log", "text": f"apply error {path}: {e!s}"}
+                )
+            with worker.db._lock:
+                worker.db._maybe_commit(force=True)
+            _maybe_progress()
+    finally:
+        try:
+            with worker.db._lock:
+                worker.db._maybe_commit(force=True)
+        except Exception:
+            pass
+
+
+def _probe_lm_studio(api_base: str, *, timeout: float = 2.5) -> bool:
+    try:
+        parts = urlsplit(api_base or "")
+        if not parts.scheme or not parts.netloc:
+            return False
+        base = f"{parts.scheme}://{parts.netloc}"
+        req = Request(f"{base}/v1/models", method="GET")
+        with urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 500
+    except Exception:
+        return False

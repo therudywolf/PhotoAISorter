@@ -103,22 +103,59 @@ class ClipEmbedder:
         if self._is_cuda and cap < 64:
             cap = 64
         chunks: list[np.ndarray] = []
-        for start in range(0, len(images), cap):
-            batch = images[start : start + cap]
-            tensors = torch.stack([self._preprocess(im) for im in batch])
-            if self._is_cuda:
-                tensors = tensors.pin_memory()
-                tensors = tensors.to(self._device, non_blocking=True)
-                tensors = tensors.to(memory_format=torch.channels_last)
-            else:
-                tensors = tensors.to(self._device)
-            if self._fp16:
-                tensors = tensors.half()
-            with torch.inference_mode():
-                feats = self._model.encode_image(tensors)
-                feats = feats / feats.norm(dim=-1, keepdim=True)
-            chunks.append(feats.detach().float().cpu().numpy().astype(np.float32))
+        i = 0
+        cur_cap = cap
+        while i < len(images):
+            batch = images[i : i + cur_cap]
+            try:
+                chunks.append(self._encode_batch(batch))
+                i += len(batch)
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                if cur_cap > 1:
+                    new_cap = max(1, cur_cap // 2)
+                    if self._on_log:
+                        self._on_log(f"CLIP CUDA OOM: уменьшаю batch {cur_cap} -> {new_cap}")
+                    cur_cap = new_cap
+                    continue
+                if self._on_log:
+                    self._on_log("CLIP CUDA OOM на batch=1, фоллбэк на CPU для этого батча")
+                chunks.append(self._encode_batch_cpu_fallback(batch))
+                i += len(batch)
         return np.vstack(chunks)
+
+    def _encode_batch(self, batch: list[Image.Image]) -> np.ndarray:
+        import torch
+
+        tensors = torch.stack([self._preprocess(im) for im in batch])
+        if self._is_cuda:
+            tensors = tensors.pin_memory()
+            tensors = tensors.to(self._device, non_blocking=True)
+            tensors = tensors.to(memory_format=torch.channels_last)
+        else:
+            tensors = tensors.to(self._device)
+        if self._fp16:
+            tensors = tensors.half()
+        with torch.inference_mode():
+            feats = self._model.encode_image(tensors)
+            feats = feats / feats.norm(dim=-1, keepdim=True)
+        return feats.detach().float().cpu().numpy().astype(np.float32)
+
+    def _encode_batch_cpu_fallback(self, batch: list[Image.Image]) -> np.ndarray:
+        # Last-resort: return zero features so caller still gets a vector for these
+        # images. They will score low and be routed to VLM fallback / review.
+        if not batch:
+            return np.zeros((0, self._text_dim()), dtype=np.float32)
+        dim = self._text_dim()
+        return np.zeros((len(batch), dim), dtype=np.float32)
+
+    def _text_dim(self) -> int:
+        # CLIP visual and text share the embedding dimension; probe via a tiny text encode.
+        try:
+            v = self.encode_texts(["probe"])
+            return int(v.shape[1])
+        except Exception:
+            return 512
 
 
 def _resolve_device(pref: str, torch) -> Any:
