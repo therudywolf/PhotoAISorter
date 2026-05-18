@@ -36,7 +36,7 @@ _FREE_SANITIZE_RE = re.compile(r"[^a-z0-9_/\-\s]+")
 _FREE_SPACES_DASH_RE = re.compile(r"[\s\-]+")
 _FREE_UNDERSCORE_RE = re.compile(r"_+")
 _TAG_LABEL_RE = re.compile(
-    r"(?is)^\s*(?:primary_category|category|tag|label|final(?:\s+tag)?|answer)\s*[:=-]\s*(.+?)\s*$"
+    r"(?is)^\s*(?:best_folder_name|primary_category|folder_name|category|tag|label|final(?:\s+tag)?|answer)\s*[:=-]\s*(.+?)\s*$"
 )
 _PROSE_WORD_RE = re.compile(
     r"\b(?:because|contains|image|looks|photo|picture|shows|there|this|visible|would)\b"

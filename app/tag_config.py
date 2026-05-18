@@ -32,6 +32,7 @@ class TagMode(str, Enum):
     AUTO = "auto"
     FREE = "free"
     CUSTOM = "custom"
+    HYBRID = "hybrid"
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ class ResolvedTagConfig:
 
     @property
     def is_strict_whitelist(self) -> bool:
-        return self.mode in (TagMode.PRESET, TagMode.CUSTOM)
+        return self.mode in (TagMode.PRESET, TagMode.CUSTOM, TagMode.HYBRID)
 
 
 def resolve_tag_config(
@@ -69,7 +70,7 @@ def resolve_tag_config(
     """Build a complete tag config from mode + profile + optional custom TagStore."""
     from app.context_tags import get_active_set, build_custom_categories, build_custom_prompts, build_user_context_from_tags
 
-    if mode == TagMode.CUSTOM:
+    if mode in (TagMode.CUSTOM, TagMode.HYBRID):
         if tag_store is None:
             from app.context_tags import load_tag_store
             tag_store = load_tag_store()
@@ -77,14 +78,13 @@ def resolve_tag_config(
         if active and active.tags:
             cats = build_custom_categories(active)
             prompts = build_custom_prompts(active)
-            ctx = build_user_context_from_tags(active)
             return ResolvedTagConfig(
-                mode=TagMode.CUSTOM,
+                mode=mode,
                 categories=cats,
                 prompts=prompts,
                 priority=(),
                 priority_rules_text="",
-                user_context=ctx,
+                user_context="",
                 whitelist=frozenset(cats) if cats else None,
                 profile=profile,
             )

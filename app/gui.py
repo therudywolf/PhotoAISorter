@@ -22,6 +22,7 @@ from app.context_tags import (
     get_active_set,
     load_tag_store,
 )
+from app.fast_classify.config import load_fast_classify_settings
 from app.tag_config import TagMode, ResolvedTagConfig, resolve_tag_config
 from app.constants import (
     CANONICAL_CATEGORIES,
@@ -87,16 +88,20 @@ _MEDIA_MODE_LABELS = {
 }
 _MEDIA_MODE_VALUES = {v: k for k, v in _MEDIA_MODE_LABELS.items()}
 
-_TAG_MODE_LABELS = {
-    "preset_sfw": "SFW",
-    "preset_nsfw": "NSFW",
-    "preset_furry_sfw": "Furry SFW",
-    "preset_furry_nsfw": "Furry NSFW",
-    "auto": "Авто",
-    "free": "Свободно",
-    "custom": "Свой список",
-}
-_TAG_MODE_VALUES = {v: k for k, v in _TAG_MODE_LABELS.items()}
+from app.tag_mode_ui import (
+    FLEXIBLE_TAG_MODES,
+    PRESET_TAG_MODES,
+    TAG_MODE_LABELS as _TAG_MODE_LABELS,
+    TAG_MODE_VALUES as _TAG_MODE_VALUES,
+    build_tag_mode_hint,
+    hybrid_start_blockers,
+    label_for_mode,
+    mode_from_label,
+    refs_button_enabled,
+)
+
+_TAG_MODE_LABELS = _TAG_MODE_LABELS
+_TAG_MODE_VALUES = _TAG_MODE_VALUES
 
 
 def _parse_tag_mode_str(tag_mode_str: str) -> tuple:
@@ -116,6 +121,8 @@ def _parse_tag_mode_str(tag_mode_str: str) -> tuple:
         return (TagMode.FREE, SearchProfile.SFW)
     elif tag_mode_str == "custom":
         return (TagMode.CUSTOM, SearchProfile.SFW)
+    elif tag_mode_str == "hybrid":
+        return (TagMode.HYBRID, SearchProfile.SFW)
     else:
         return (TagMode.PRESET, SearchProfile.SFW)
 
@@ -186,9 +193,7 @@ class App(ctk.CTk):
             _saved_free = bool(saved.get("free_tag_mode", False))
             _saved_mode = "free" if _saved_free else "preset_sfw"
         self._tag_mode_var = ctk.StringVar(value=_saved_mode)
-        self._tag_mode_label_var = ctk.StringVar(
-            value=_TAG_MODE_LABELS.get(_saved_mode, _TAG_MODE_LABELS["preset_sfw"])
-        )
+        self._tag_mode_label_var = ctk.StringVar(value=label_for_mode(_saved_mode))
         self._prompt_extra_var = ctk.StringVar(value=str(saved.get("prompt_extra", "") or ""))
         self._review_first_var = ctk.BooleanVar(value=bool(saved.get("review_first_sort", False)))
 
@@ -290,14 +295,30 @@ class App(ctk.CTk):
         self._ffmpeg_hint.pack(side="left", fill="x", expand=True)
 
         _section_label(folders, t("folders.tag_mode.section"))
-        row_tag_mode = ctk.CTkFrame(folders, fg_color="transparent")
-        row_tag_mode.pack(fill="x", padx=8, pady=(0, 4))
-        ctk.CTkSegmentedButton(
-            row_tag_mode,
-            values=[_TAG_MODE_LABELS[k] for k in ("preset_sfw", "preset_nsfw", "preset_furry_sfw", "preset_furry_nsfw", "auto", "free", "custom")],
-            variable=self._tag_mode_label_var,
-            command=self._on_tag_mode_label_change,
-        ).pack(fill="x", expand=True)
+        row_tag_presets = ctk.CTkFrame(folders, fg_color="transparent")
+        row_tag_presets.pack(fill="x", padx=8, pady=(0, 2))
+        ctk.CTkLabel(row_tag_presets, text=t("folders.tag_mode.hybrid_row_presets"), width=72, anchor="w").pack(
+            side="left"
+        )
+        self._tag_preset_seg = ctk.CTkSegmentedButton(
+            row_tag_presets,
+            values=[_TAG_MODE_LABELS[k] for k in PRESET_TAG_MODES],
+            command=self._on_tag_mode_preset_clicked,
+        )
+        self._tag_preset_seg.pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        row_tag_flex = ctk.CTkFrame(folders, fg_color="transparent")
+        row_tag_flex.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(row_tag_flex, text=t("folders.tag_mode.hybrid_row_modes"), width=72, anchor="w").pack(
+            side="left"
+        )
+        self._tag_flex_seg = ctk.CTkSegmentedButton(
+            row_tag_flex,
+            values=[_TAG_MODE_LABELS[k] for k in FLEXIBLE_TAG_MODES],
+            command=self._on_tag_mode_flex_clicked,
+        )
+        self._tag_flex_seg.pack(side="left", fill="x", expand=True, padx=(4, 0))
+
         row_tag_btns = ctk.CTkFrame(folders, fg_color="transparent")
         row_tag_btns.pack(fill="x", padx=8, pady=(0, 4))
         ctk.CTkButton(
@@ -306,6 +327,25 @@ class App(ctk.CTk):
             width=150,
             command=self._show_canonical_tags_dialog,
         ).pack(side="left", padx=(0, 8))
+        self._refs_btn = ctk.CTkButton(
+            row_tag_btns,
+            text=t("folders.tag_mode.refs"),
+            width=110,
+            command=self._open_refs_folder,
+        )
+        self._refs_btn.pack(side="left", padx=(0, 8))
+
+        row_hybrid_opts = ctk.CTkFrame(folders, fg_color="transparent")
+        row_hybrid_opts.pack(fill="x", padx=8, pady=(0, 4))
+        _fc = load_fast_classify_settings(self._loaded_settings)
+        self._hybrid_vlm_fallback_var = ctk.BooleanVar(value=_fc.vlm_fallback)
+        self._hybrid_vlm_cb = ctk.CTkCheckBox(
+            row_hybrid_opts,
+            text=t("folders.tag_mode.hybrid_vlm_fallback"),
+            variable=self._hybrid_vlm_fallback_var,
+            command=self._on_hybrid_option_changed,
+        )
+        self._hybrid_vlm_cb.pack(side="left")
         self._tag_mode_hint = ctk.CTkLabel(
             folders,
             text="",
@@ -317,7 +357,10 @@ class App(ctk.CTk):
         )
         self._tag_mode_hint.pack(fill="x", padx=8, pady=(0, 8))
         self._tag_mode_var.trace_add("write", lambda *_: self.after(0, self._on_tag_mode_value_changed))
+        self._sync_tag_mode_segments()
         self._update_tag_mode_hint()
+        self._update_refs_button()
+        self._update_hybrid_options_visibility()
 
         lm = ctk.CTkFrame(P, fg_color=("gray90", "gray16"), corner_radius=8)
         lm.pack(fill="x", **pad)
@@ -553,33 +596,57 @@ class App(ctk.CTk):
             self._media_mode_label_var.set(label)
         self._update_ffmpeg_hint()
 
-    def _on_tag_mode_label_change(self, label: str) -> None:
-        value = _TAG_MODE_VALUES.get(label)
-        if value:
-            self._tag_mode_var.set(value)
+    def _set_tag_mode(self, mode: str) -> None:
+        if mode not in _TAG_MODE_LABELS:
+            return
+        self._tag_mode_var.set(mode)
+        self._tag_mode_label_var.set(label_for_mode(mode))
+
+    def _on_tag_mode_preset_clicked(self, label: str) -> None:
+        mode = mode_from_label(label)
+        if mode:
+            self._set_tag_mode(mode)
+
+    def _on_tag_mode_flex_clicked(self, label: str) -> None:
+        mode = mode_from_label(label)
+        if mode:
+            self._set_tag_mode(mode)
+
+    def _sync_tag_mode_segments(self) -> None:
+        mode = self._tag_mode_var.get()
+        label = label_for_mode(mode)
+        if mode in PRESET_TAG_MODES:
+            self._tag_preset_seg.set(label)
+        if mode in FLEXIBLE_TAG_MODES:
+            self._tag_flex_seg.set(label)
 
     def _on_tag_mode_value_changed(self) -> None:
-        label = _TAG_MODE_LABELS.get(self._tag_mode_var.get(), _TAG_MODE_LABELS["preset_sfw"])
-        if self._tag_mode_label_var.get() != label:
-            self._tag_mode_label_var.set(label)
+        self._sync_tag_mode_segments()
         self._update_tag_mode_hint()
+        self._update_refs_button()
+        self._update_hybrid_options_visibility()
 
     def _update_tag_mode_hint(self) -> None:
-        mode = self._tag_mode_var.get()
-        if mode == "free":
-            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_free"))
-        elif mode == "auto":
-            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_auto"))
-        elif mode == "custom":
-            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_custom"))
+        self._tag_mode_hint.configure(text=build_tag_mode_hint(self._tag_mode_var.get()))
+
+    def _update_refs_button(self) -> None:
+        enabled = refs_button_enabled(self._tag_mode_var.get())
+        self._refs_btn.configure(state="normal" if enabled else "disabled")
+
+    def _update_hybrid_options_visibility(self) -> None:
+        if self._tag_mode_var.get() == "hybrid":
+            self._hybrid_vlm_cb.pack(side="left")
         else:
-            self._tag_mode_hint.configure(text=t("folders.tag_mode.hint_preset"))
+            self._hybrid_vlm_cb.pack_forget()
+
+    def _on_hybrid_option_changed(self) -> None:
+        self._save_gui_settings()
 
     def _show_canonical_tags_dialog(self) -> None:
         win = ctk.CTkToplevel(self)
         mode = self._tag_mode_var.get()
-        if mode == "custom":
-            win.title("Свой список категорий")
+        if mode in ("custom", "hybrid"):
+            win.title("Свой список категорий" if mode == "custom" else "Быстрая CLIP — список категорий")
             _store = load_tag_store()
             _aset = get_active_set(_store)
             categories = build_custom_categories(_aset) if _aset else ()
@@ -723,6 +790,10 @@ class App(ctk.CTk):
                         "dup_force_recompute_default": self._dup_force_recompute_default,
                     },
                     "duplicate_finder": dup,
+                    "fast_classify": {
+                        **load_fast_classify_settings().to_dict(),
+                        "vlm_fallback": bool(self._hybrid_vlm_fallback_var.get()),
+                    },
                 }
             )
             save_secret_settings({"lm_studio_api_key": self._api_key_resolved()})
@@ -1028,6 +1099,24 @@ class App(ctk.CTk):
         from app.gui_context_tags import TagSetsDialog
         TagSetsDialog(self, on_save=self._refresh_context_display)
 
+    def _open_refs_folder(self) -> None:
+        import os
+        import subprocess
+        import sys
+
+        from app.fast_classify.exemplars import ensure_refs_layout
+
+        root = ensure_refs_layout(on_log=lambda m: self._append_log(m))
+        try:
+            if sys.platform == "win32":
+                os.startfile(root)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(root)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(root)], check=False)
+        except OSError as e:
+            self._append_log(f"Не удалось открыть папку эталонов: {e}")
+
     def _on_loaded_models(self) -> None:
         base = self._api_var.get().strip() or DEFAULT_API_BASE
 
@@ -1078,9 +1167,16 @@ class App(ctk.CTk):
         from app.constants import SearchProfile
         tag_cfg = resolve_tag_config(tag_mode, profile=search_profile, tag_store=_tag_store)
 
-        if tag_mode == TagMode.CUSTOM and not tag_cfg.categories:
-            self._append_log("Ошибка: нет активного набора тегов или он пуст. Откройте «Теги...» и настройте.")
+        if tag_mode in (TagMode.CUSTOM, TagMode.HYBRID) and not tag_cfg.categories:
+            self._append_log(t("folders.tag_mode.hybrid_error_no_tags"))
             return
+
+        if tag_mode == TagMode.HYBRID:
+            blockers = hybrid_start_blockers(categories_count=len(tag_cfg.categories))
+            if blockers:
+                for msg in blockers:
+                    self._append_log(f"Ошибка: {msg}")
+                return
 
         user_context = tag_cfg.user_context
         session_key = self._sort_session_key_for_current(in_path, out_path, media_mode, tag_mode_str)
@@ -1116,6 +1212,8 @@ class App(ctk.CTk):
             self._append_log(t("sort.log_mode_auto"))
         elif tag_mode == TagMode.CUSTOM:
             self._append_log("Режим папок: пользовательский список категорий.")
+        elif tag_mode == TagMode.HYBRID:
+            self._append_log("Режим папок: быстрая CLIP + VLM для сомнительных файлов.")
         else:
             self._append_log(t("sort.log_mode_free"))
             self._append_log(t("sort.warn_large_library_free"))

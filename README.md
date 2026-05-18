@@ -21,6 +21,7 @@ The app is designed for private local media libraries that may contain personal 
   - **Auto categories** — stabilized model-generated folder names.
   - **Free model tags** — unrestricted hierarchical tags for experiments.
   - **Custom list** — user-defined tag sets with optional recognition descriptions.
+- **Fast CLIP (hybrid)** — local OpenCLIP scoring with heuristics, exemplar photos, and optional VLM fallback for uncertain files (best for large libraries with custom tag sets).
 - User-defined tag sets: create named collections of output categories, each with an optional description that tells the model what to look for.
 - Structured JSON classification with legacy tag fallback.
 - Model profiles for classifier, duplicate verifier, screenshot OCR, and quick preview roles.
@@ -222,6 +223,22 @@ status locally. API keys are not written into session records.
 Aliases apply to smart auto categories before folder names are created.
 
 See [examples/category_aliases.example.json](examples/category_aliases.example.json) for a larger starter map.
+
+For hybrid **Fast CLIP** mode, virtual tag names (finer labels for the model) can map to parent folders on disk — see [examples/hybrid_virtual_aliases.example.json](examples/hybrid_virtual_aliases.example.json). Copy the pattern into your local `category_aliases.json` under app data (that file is gitignored).
+
+### Fast CLIP (hybrid) mode
+
+1. Install optional deps: `pip install torch open-clip-torch` (included in `requirements.txt`).
+2. In the GUI, choose **Fast CLIP**, configure tags via **Tags…**, and add reference photos via **References…** (`refs/<tag>/` under app data).
+3. Enable **VLM fallback** only for files CLIP marks as uncertain — keeps large runs fast.
+
+Tune thresholds in `gui_settings.json` → `fast_classify` (`confidence_threshold`, `min_margin`, `exemplar_boost`). That settings file is local and gitignored.
+
+## Before you commit or push
+
+- Do **not** commit `local_presets.json`, `context_tags.json`, `category_aliases.json`, `gui_settings.json`, `refs/`, or SQLite databases — they are listed in `.gitignore`.
+- Run `python -m pytest -q` and `python -m compileall -q app tests main.py`.
+- Scan for secrets if you use [gitleaks](https://github.com/gitleaks/gitleaks): `gitleaks detect --source .` (optional).
 
 ## Development Checks
 

@@ -61,6 +61,24 @@ def test_parse_custom_mode_rejects_unknown_tag() -> None:
     assert result.category == UNCATEGORIZED
 
 
+def test_parse_hybrid_mode_with_whitelist() -> None:
+    wl = frozenset({"iam", "dog", "uncategorized"})
+    raw = '{"best_folder_name": "iam", "confidence": 0.77, "top_candidates": [], "reasoning": "selfie"}'
+    result = parse_classification_result(raw, mode="hybrid", whitelist=wl)
+    assert result.category == "iam"
+
+
+def test_parse_custom_primary_category_alias_for_best_folder_name() -> None:
+    custom_wl = frozenset({"my_dog", "dog", "uncategorized"})
+    raw = (
+        '{"primary_category": "my_dog", "confidence": 0.8, '
+        '"candidates": ["dog"], "reason_short": "black lab"}'
+    )
+    result = parse_classification_result(raw, mode="custom", whitelist=custom_wl)
+    assert result.category == "my_dog"
+    assert "dog" in result.candidates
+
+
 def test_parse_preset_mode_accepts_profile_tag() -> None:
     from app.constants import SearchProfile, categories_for_profile
     nsfw_wl = frozenset(categories_for_profile(SearchProfile.NSFW))

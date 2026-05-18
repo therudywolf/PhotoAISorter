@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
+
+"""Settings for local CLIP / hybrid classification."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from app.db import default_db_path
+
+
+def refs_dir() -> Path:
+    return default_db_path().parent / "refs"
+
+
+@dataclass(frozen=True)
+class FastClassifySettings:
+    model_name: str = "ViT-B-32"
+    pretrained: str = "openai"
+    batch_size: int = 32
+    image_max_side: int = 384
+    confidence_threshold: float = 0.28
+    min_margin: float = 0.06
+    softmax_temperature: float = 0.05
+    vlm_fallback: bool = True
+    exemplar_boost: float = 1.15
+    device: str = "auto"
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any] | None) -> FastClassifySettings:
+        if not isinstance(raw, dict):
+            return cls()
+        return cls(
+            model_name=str(raw.get("model_name", "ViT-B-32") or "ViT-B-32"),
+            pretrained=str(raw.get("pretrained", "openai") or "openai"),
+            batch_size=max(1, min(128, int(raw.get("batch_size", 32)))),
+            image_max_side=max(128, min(768, int(raw.get("image_max_side", 384)))),
+            confidence_threshold=max(0.05, min(0.95, float(raw.get("confidence_threshold", 0.28)))),
+            min_margin=max(0.01, min(0.5, float(raw.get("min_margin", 0.06)))),
+            softmax_temperature=max(0.01, min(0.2, float(raw.get("softmax_temperature", 0.05)))),
+            vlm_fallback=bool(raw.get("vlm_fallback", True)),
+            exemplar_boost=max(1.0, min(2.0, float(raw.get("exemplar_boost", 1.15)))),
+            device=str(raw.get("device", "auto") or "auto"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "model_name": self.model_name,
+            "pretrained": self.pretrained,
+            "batch_size": self.batch_size,
+            "image_max_side": self.image_max_side,
+            "confidence_threshold": self.confidence_threshold,
+            "min_margin": self.min_margin,
+            "softmax_temperature": self.softmax_temperature,
+            "vlm_fallback": self.vlm_fallback,
+            "exemplar_boost": self.exemplar_boost,
+            "device": self.device,
+        }
+
+
+def load_fast_classify_settings(gui_settings: dict[str, Any] | None = None) -> FastClassifySettings:
+    if isinstance(gui_settings, dict):
+        block = gui_settings.get("fast_classify")
+        if isinstance(block, dict):
+            return FastClassifySettings.from_dict(block)
+    from app.settings_store import load_gui_settings
+
+    saved = load_gui_settings()
+    block = saved.get("fast_classify") if isinstance(saved, dict) else None
+    return FastClassifySettings.from_dict(block if isinstance(block, dict) else None)

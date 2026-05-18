@@ -105,6 +105,21 @@ def video_contact_sheet_data_uri(
     return pil_image_to_jpeg_data_uri(sheet, max_side=output_max_side, quality=quality)
 
 
+def load_image_rgb(path: Path, *, max_side: int = MAX_IMAGE_SIDE) -> Image.Image:
+    """Load still image as RGB, optionally downscale for local ML models."""
+    with Image.open(path) as im:
+        im = _pil_to_rgb(im)
+        w, h = im.size
+        long_side = max(w, h)
+        cap = max(64, int(max_side))
+        if long_side > cap:
+            scale = cap / float(long_side)
+            nw = max(1, int(round(w * scale)))
+            nh = max(1, int(round(h * scale)))
+            im = im.resize((nw, nh), Image.Resampling.LANCZOS)
+        return im.copy()
+
+
 def image_to_jpeg_base64_data_uri(path: Path) -> str:
     """
     Load image, convert to RGB if needed, resize so max side <= MAX_IMAGE_SIDE,

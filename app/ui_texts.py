@@ -33,6 +33,22 @@ TEXTS: dict[str, str] = {
         "Свой список: модель использует только ваши теги из пользовательского списка. "
         "Настройте список в «Теги...» → вкладка «Списки категорий»."
     ),
+    "folders.tag_mode.hint_hybrid": (
+        "Быстрая CLIP: локальная сортировка батчами (тысячи фото/час на GPU). "
+        "Теги — из активного пользовательского набора. Эталоны — кнопка «Эталоны…». "
+        "Сомнительные файлы при необходимости уходят в LM Studio (VLM fallback)."
+    ),
+    "folders.tag_mode.hybrid_clip_ok": "CLIP: зависимости установлены, готов к локальной сортировке.",
+    "folders.tag_mode.hybrid_clip_missing": (
+        "CLIP: не установлен — pip install torch open-clip-torch (режим запуска недоступен)."
+    ),
+    "folders.tag_mode.hybrid_error_no_tags": (
+        "Нет активного набора тегов. Откройте «Теги…» и выберите или создайте набор."
+    ),
+    "folders.tag_mode.refs": "Эталоны…",
+    "folders.tag_mode.hybrid_vlm_fallback": "VLM fallback (LM Studio для сомнительных)",
+    "folders.tag_mode.hybrid_row_presets": "Пресеты",
+    "folders.tag_mode.hybrid_row_modes": "Режимы",
     "folders.tags.dialog_title_preset": "Пресет — список папок для текущего профиля",
     "folders.tags.dialog_title_reference": "Справочник тегов — не whitelist для Auto/Free",
     "sort.log_mode_preset": "Режим папок: {profile} (фиксированный список тегов).",

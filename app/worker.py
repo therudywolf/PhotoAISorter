@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_auto, normalize_tag_free
-from app.category_aliases import aliases_to_prompt_lines
+from app.category_aliases import aliases_to_prompt_lines, resolve_storage_category
 from app.classification_result import ClassificationResult, parse_classification_result
 from app.constants import (
     CLASSIFY_FILE_MAX_ATTEMPTS,
@@ -266,6 +266,8 @@ class SortWorker:
             "api_latency_sec": 0.0,
             "needs_review": 0,
             "review_written": 0,
+            "fast_classify": 0,
+            "vlm_fallback": 0,
         }
         metrics_lock = threading.Lock()
         try:
@@ -491,11 +493,18 @@ class SortWorker:
                 return (30.0, max(30.0, float(self.request_timeout_sec)))
 
             def _result_from_raw(raw: str) -> ClassificationResult:
+                review_conf = 0.52
+                review_margin = 0.10
+                if self.tag_config.mode not in (TagMode.CUSTOM, TagMode.HYBRID):
+                    review_conf = 0.55
+                    review_margin = 0.12
                 return parse_classification_result(
                     raw,
                     mode=_mode_name(),  # type: ignore[arg-type]
                     aliases=self.category_aliases,
                     whitelist=self.tag_config.whitelist,
+                    review_confidence_threshold=review_conf,
+                    review_margin_threshold=review_margin,
                 )
 
             def _uncategorized_result(reason: str, raw_text: str = "") -> ClassificationResult:
@@ -856,7 +865,8 @@ class SortWorker:
                     with metrics_lock:
                         metrics["needs_review"] += 1
 
-                tag_dir = dest_dir / category
+                storage_category = resolve_storage_category(category, self.category_aliases)
+                tag_dir = dest_dir / storage_category
                 if self.review_first:
                     _record_review(path, digest, result)
                     self.db.mark_sort_session_item(
@@ -926,6 +936,30 @@ class SortWorker:
                 save_session("completed", 0, force=True)
                 return
 
+            if self.tag_config.mode == TagMode.HYBRID:
+                from app.sort_hybrid import run_hybrid_sort
+
+                run_hybrid_sort(
+                    self,
+                    source_dir,
+                    dest_dir,
+                    files,
+                    session_key=session_key,
+                    metrics=metrics,
+                    metrics_lock=metrics_lock,
+                    manifest=manifest,
+                    complete_task=complete_task,
+                    save_session=save_session,
+                    _prompt_for_request=_prompt_for_request,
+                    _result_from_raw=_result_from_raw,
+                    _timed_api_call=_timed_api_call,
+                    _get_api_base=_get_api_base,
+                    _timeout=_timeout,
+                    _record_review=_record_review,
+                    _register_api_error=_register_api_error,
+                )
+                return
+
             workers = max(1, min(self.workers, len(files)))
             executor = ThreadPoolExecutor(max_workers=workers)
             try:
@@ -987,6 +1021,8 @@ class SortWorker:
                         else 0.0,
                         "needs_review": metrics["needs_review"],
                         "review_written": metrics["review_written"],
+                        "fast_classify": metrics.get("fast_classify", 0),
+                        "vlm_fallback": metrics.get("vlm_fallback", 0),
                     },
                 }
             )

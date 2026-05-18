@@ -64,6 +64,15 @@ def save_category_aliases(aliases: dict[str, str], path: Path | None = None) -> 
     tmp.replace(p)
 
 
+def resolve_storage_category(category: str, aliases: dict[str, str] | None = None) -> str:
+    """Map a model tag to the on-disk folder name (virtual tags → parent folder)."""
+    key = clean_alias_tag(category)
+    if not key:
+        return category
+    normalized = normalize_aliases(aliases or {})
+    return normalized.get(key, key)
+
+
 def aliases_to_prompt_lines(aliases: dict[str, str]) -> str:
     normalized = normalize_aliases(aliases)
     if not normalized:

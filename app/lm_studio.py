@@ -183,6 +183,57 @@ _HEADER_FREE = (
     "When in doubt, output a new specific hierarchical path."
 )
 
+CUSTOM_CLASSIFICATION_GUIDANCE = """
+You are an image classification expert.
+
+Task:
+You receive ONE image and a FIXED list of possible classes.
+Each class has:
+- a folder_name (machine label, lowercase with underscores)
+- a natural language description that explains what images belong there.
+
+Your job is to:
+1) Carefully read ALL class descriptions.
+2) Look at the image in detail.
+3) Choose the SINGLE BEST class whose description matches the image content.
+4) If you are not fully sure, still pick the closest class, but explain your reasoning.
+
+Very important rules:
+- Focus on the MAIN subject of the image, not small details in the background.
+- If the image shows the user himself, always prioritize classes related to "iam" or "personal_user_*".
+- If the image shows the user's personal pets, prioritize "my_cat" and "my_dog" classes over generic "cat" and "dog".
+- Distinguish clearly between:
+  - real photos vs AI-generated images
+  - SFW (no explicit nudity/sex) vs NSFW (explicit nudity/sex)
+  - furry/anthro characters vs real animals vs humans
+  - canidae furry (wolves, foxes, dogs) vs other furry species
+- If an image matches both SFW and NSFW classes, ALWAYS choose an NSFW class.
+- If an image matches both a generic animal class and a more specific furry or personal pet class, ALWAYS choose the more specific class.
+- If two classes are similarly likely, list both in top_candidates with honest confidence scores and set needs_review to true.
+- Children must ALWAYS be assigned only to strictly SFW classes.
+- Never invent new classes. Only choose from the given list.
+""".strip()
+
+_CUSTOM_STRUCTURED_OUTPUT_RULE = (
+    "Respond ONLY with a single JSON object (no markdown fences, no extra text) using exactly these fields:\n"
+    "{\n"
+    '  "best_folder_name": "<one folder_name from CLASSES>",\n'
+    '  "confidence": <number from 0 to 1>,\n'
+    '  "top_candidates": [\n'
+    '    {"folder_name": "<folder_name>", "confidence": <number from 0 to 1>},\n'
+    "    ...\n"
+    "  ],\n"
+    '  "reasoning": "<short explanation in English why this class fits best>"\n'
+    "}\n"
+    f"If unsure, set best_folder_name to {UNCATEGORIZED}, confidence below 0.55, and explain why in reasoning.\n"
+    "You may also use primary_category instead of best_folder_name (same value) for compatibility."
+)
+
+_CUSTOM_PLAIN_OUTPUT_RULE = (
+    "Do not apologize, do not explain, do not refuse. Output ONLY the raw folder_name from CLASSES, "
+    f"lowercase, no punctuation. If unsure, output {UNCATEGORIZED}."
+)
+
 
 def build_system_prompt(
     cfg: ResolvedTagConfig,
@@ -197,12 +248,8 @@ def build_system_prompt(
         header = _HEADER_AUTO
     elif cfg.mode == TagMode.FREE:
         header = _HEADER_FREE
-    elif cfg.mode == TagMode.CUSTOM:
-        header = (
-            "You are a local backend automated tagging script. You have no conversational ability. "
-            "Your ONLY job is to output a single exact string from this custom user-defined list: "
-            f"{', '.join(tag_keys)}."
-        )
+    elif cfg.mode in (TagMode.CUSTOM, TagMode.HYBRID):
+        header = CUSTOM_CLASSIFICATION_GUIDANCE
     else:
         header = (
             "You are a local backend automated tagging script. You have no conversational ability. "
@@ -210,24 +257,25 @@ def build_system_prompt(
             f"{', '.join(tag_keys)}."
         )
 
-    output_rule = (
-        "Output a single compact JSON object with keys: primary_category, candidates, confidence, "
-        "reason_short, needs_review. primary_category and candidates must use lowercase tag strings only. "
-        "confidence is 0..1. reason_short must be short. If unsure, set primary_category to "
-        f"{UNCATEGORIZED}, confidence below 0.55, and needs_review true."
-        if structured_output
-        else (
+    if cfg.mode in (TagMode.CUSTOM, TagMode.HYBRID):
+        output_rule = _CUSTOM_STRUCTURED_OUTPUT_RULE if structured_output else _CUSTOM_PLAIN_OUTPUT_RULE
+    elif structured_output:
+        output_rule = (
+            "Output a single compact JSON object with keys: primary_category, candidates, confidence, "
+            "reason_short, needs_review. primary_category and candidates must use lowercase tag strings only. "
+            "confidence is 0..1. reason_short must be short. If unsure, set primary_category to "
+            f"{UNCATEGORIZED}, confidence below 0.55, and needs_review true."
+        )
+    else:
+        output_rule = (
             "Do not apologize, do not explain, do not refuse. Output ONLY the raw tag, lowercase, "
             f"no punctuation. If unsure, output {UNCATEGORIZED}."
         )
-    )
 
-    parts: list[str] = [
-        header,
-        output_rule,
-        "Do not write long reasoning. If you must think, put only the final answer after it.",
-        "",
-    ]
+    parts: list[str] = [header, output_rule]
+    if cfg.mode not in (TagMode.CUSTOM, TagMode.HYBRID):
+        parts.append("Do not write long reasoning. If you must think, put only the final answer after it.")
+    parts.append("")
 
     if cfg.priority_rules_text:
         parts.append(cfg.priority_rules_text)
@@ -235,8 +283,8 @@ def build_system_prompt(
 
     if cfg.is_free:
         parts.append("Reference definitions (optional, not a whitelist):")
-    elif cfg.mode == TagMode.CUSTOM:
-        parts.append("User-defined categories (use exactly these tags):")
+    elif cfg.mode in (TagMode.CUSTOM, TagMode.HYBRID):
+        parts.append("CLASSES (folder_name: description):")
     else:
         parts.append("Definitions (tag: meaning):")
 
@@ -414,7 +462,12 @@ def _extract_assistant_text(msg: dict[str, Any]) -> str:
     return ""
 
 
-def _user_text_single(structured: bool) -> str:
+def _user_text_single(structured: bool, *, cfg: ResolvedTagConfig | None = None) -> str:
+    if structured and cfg is not None and cfg.mode in (TagMode.CUSTOM, TagMode.HYBRID):
+        return (
+            "Classify the attached image using only the CLASSES list above. "
+            "Return one JSON object only (best_folder_name, confidence, top_candidates, reasoning)."
+        )
     if structured:
         return (
             "Classify this image. Return one compact JSON object only. "
@@ -427,7 +480,13 @@ def _user_text_single(structured: bool) -> str:
     )
 
 
-def _user_text_multi(structured: bool) -> str:
+def _user_text_multi(structured: bool, *, cfg: ResolvedTagConfig | None = None) -> str:
+    if structured and cfg is not None and cfg.mode in (TagMode.CUSTOM, TagMode.HYBRID):
+        return (
+            "These images are frames from the same video file in chronological order. "
+            "Classify the entire content using only the CLASSES list above. "
+            "Return one JSON object only (best_folder_name, confidence, top_candidates, reasoning)."
+        )
     if structured:
         return (
             "These images are frames from the same video file in chronological order. "
@@ -458,7 +517,7 @@ def build_messages_cfg(
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": _user_text_single(structured_output)},
+                {"type": "text", "text": _user_text_single(structured_output, cfg=cfg)},
                 {"type": "image_url", "image_url": {"url": image_data_uri}},
             ],
         },
@@ -475,7 +534,7 @@ def build_messages_multi_cfg(
     """Build multi-frame messages from a ResolvedTagConfig."""
     system_text = build_system_prompt(cfg, prompt_extra=prompt_extra, structured_output=structured_output)
     user_parts: list[dict[str, Any]] = [
-        {"type": "text", "text": _user_text_multi(structured_output)},
+        {"type": "text", "text": _user_text_multi(structured_output, cfg=cfg)},
     ]
     for uri in image_data_uris:
         user_parts.append({"type": "image_url", "image_url": {"url": uri}})
@@ -685,6 +744,33 @@ def classify_frames_cfg(
 # --- Legacy API (preserved for backward compat / tests) ---
 
 
+def _legacy_resolved_cfg(
+    user_context: str,
+    *,
+    free_mode: bool,
+    auto_mode: bool,
+    general_mode: bool,
+    custom_categories: tuple[str, ...] | None,
+    custom_prompts: dict[str, str] | None,
+) -> ResolvedTagConfig:
+    if custom_categories:
+        return ResolvedTagConfig(
+            mode=TagMode.CUSTOM,  # legacy API
+            categories=custom_categories,
+            prompts=custom_prompts or {},
+            whitelist=frozenset(custom_categories),
+        )
+    from app.tag_config import resolve_tag_config
+
+    if auto_mode:
+        mode = TagMode.AUTO
+    elif free_mode:
+        mode = TagMode.FREE
+    else:
+        mode = TagMode.PRESET
+    return resolve_tag_config(mode, user_context_override=user_context)
+
+
 def build_messages(
     image_data_uri: str,
     user_context: str,
@@ -698,6 +784,14 @@ def build_messages(
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
     """Legacy: System + user with vision image_url (OpenAI-compatible)."""
+    legacy_cfg = _legacy_resolved_cfg(
+        user_context,
+        free_mode=free_mode,
+        auto_mode=auto_mode,
+        general_mode=general_mode,
+        custom_categories=custom_categories,
+        custom_prompts=custom_prompts,
+    )
     system_text = build_classification_system_prompt(
         user_context,
         free_mode=free_mode,
@@ -713,7 +807,7 @@ def build_messages(
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": _user_text_single(structured_output)},
+                {"type": "text", "text": _user_text_single(structured_output, cfg=legacy_cfg)},
                 {"type": "image_url", "image_url": {"url": image_data_uri}},
             ],
         },
@@ -733,6 +827,14 @@ def build_messages_multi(
     structured_output: bool = False,
 ) -> list[dict[str, Any]]:
     """Legacy: Several frames from one video/GIF — один тег на весь контент."""
+    legacy_cfg = _legacy_resolved_cfg(
+        user_context,
+        free_mode=free_mode,
+        auto_mode=auto_mode,
+        general_mode=general_mode,
+        custom_categories=custom_categories,
+        custom_prompts=custom_prompts,
+    )
     system_text = build_classification_system_prompt(
         user_context,
         free_mode=free_mode,
@@ -744,7 +846,7 @@ def build_messages_multi(
         structured_output=structured_output,
     )
     user_parts: list[dict[str, Any]] = [
-        {"type": "text", "text": _user_text_multi(structured_output)},
+        {"type": "text", "text": _user_text_multi(structured_output, cfg=legacy_cfg)},
     ]
     for uri in image_data_uris:
         user_parts.append({"type": "image_url", "image_url": {"url": uri}})

@@ -9,11 +9,19 @@ __pycache__/
 *$py.class
 .Python
 
-# App data (local user presets and state)
+# App data (local user presets and state — never commit personal tag lists)
 *.sqlite3
 context_tags.json
+**/context_tags.json
 local_presets.json
+**/local_presets.json
 category_aliases.json
+**/category_aliases.json
+gui_settings.json
+**/gui_settings.json
+
+# Local reference photos for fast CLIP (personal)
+refs/
 
 # Testing / linting
 .pytest_cache/
