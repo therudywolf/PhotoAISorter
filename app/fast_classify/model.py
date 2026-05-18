@@ -13,6 +13,7 @@ import numpy as np
 from PIL import Image
 
 from app.fast_classify.config import FastClassifySettings
+from app.fast_classify.device_info import resolve_clip_device
 from app.fast_classify.weights import (
     clip_cache_dir,
     ensure_clip_weights_file,
@@ -49,7 +50,7 @@ class ClipEmbedder:
         self._torch = torch
         self._settings = settings
         self._on_log = on_log
-        device = _resolve_device(settings.device, torch)
+        device = resolve_clip_device(settings.device, torch, on_log=on_log)
         is_cuda = device.type == "cuda"
         use_fp16 = bool(getattr(settings, "use_fp16", True)) and is_cuda
         cache_dir = str(clip_cache_dir())
@@ -64,7 +65,11 @@ class ClipEmbedder:
                         f"CLIP: инициализация {settings.model_name} "
                         f"на {device}{' fp16' if use_fp16 else ''}…"
                     )
-                load_kwargs: dict[str, Any] = {"cache_dir": cache_dir}
+                load_kwargs: dict[str, Any] = {
+                    "cache_dir": cache_dir,
+                    # OpenAI .pt checkpoints are TorchScript; PyTorch 2.6+ defaults weights_only=True.
+                    "weights_only": False,
+                }
                 mean = pre_cfg.get("mean")
                 std = pre_cfg.get("std")
                 if mean is not None:
@@ -197,18 +202,3 @@ class ClipEmbedder:
             return 512
 
 
-def _resolve_device(pref: str, torch) -> Any:
-    p = (pref or "auto").strip().lower()
-    if p == "cpu":
-        return torch.device("cpu")
-    if p == "cuda":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if p == "mps":
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return torch.device("mps")
-        return torch.device("cpu")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
