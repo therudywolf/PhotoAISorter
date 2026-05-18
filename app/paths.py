@@ -128,11 +128,12 @@ def migrate_legacy_project_root() -> None:
     root = project_root()
     legacy_presets = root / "local_presets.json"
     dst_tags = app_state_dir() / "context_tags.json"
-    if legacy_presets.is_file() and not dst_tags.is_file():
+    if legacy_presets.is_file():
         try:
-            dst_tags.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(legacy_presets, dst_tags)
             backup = root / "local_presets.json.migrated"
+            if not dst_tags.is_file():
+                dst_tags.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(legacy_presets, dst_tags)
             if not backup.is_file():
                 legacy_presets.replace(backup)
         except OSError:
