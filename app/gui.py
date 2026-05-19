@@ -42,9 +42,14 @@ from app.signature_db import SignatureDatabase
 from app.task_state import TaskState
 from app.ui_texts import t
 from app.lm_studio import (
+    canonical_model_id,
     full_api_self_test,
+    is_valid_ui_model_id,
     list_models,
     loaded_model_instances,
+    pick_best_loaded_model_key,
+    resolve_ui_model,
+    validate_model_for_sort,
 )
 from app.video_frames import resolve_ffmpeg_executable
 from app.worker import SortWorker
@@ -170,8 +175,15 @@ class App(ctk.CTk):
         self._api_key_var = ctk.StringVar(
             value=str(secrets.get("lm_studio_api_key", "") or DEFAULT_API_KEY).strip()
         )
-        self._model_var = ctk.StringVar(value=t("lm.models.placeholder"))
+        _saved_model_selected = str(saved.get("model_selected", "") or "").strip()
+        _combo_init = (
+            _saved_model_selected
+            if is_valid_ui_model_id(_saved_model_selected)
+            else t("lm.models.placeholder")
+        )
+        self._model_var = ctk.StringVar(value=_combo_init)
         self._model_manual_var = ctk.StringVar(value=str(saved.get("model_manual", "") or ""))
+        self._saved_model_selected = _saved_model_selected
         self._model_profiles = merge_profiles(
             saved.get("model_profiles", {}),
             api_base=self._api_var.get(),
@@ -223,6 +235,7 @@ class App(ctk.CTk):
         migrate_roaming_clip_data()
         migrate_legacy_project_root()
         self._build()
+        self._restore_model_combo_selection()
         self._append_log(f"Кеш приложения: {project_tmp_dir()} (держите проект на SSD)")
         if self._interrupted_sort_sessions:
             self._append_log(f"Найдено прерванных сессий сортировки: {self._interrupted_sort_sessions}.")
@@ -239,13 +252,37 @@ class App(ctk.CTk):
         self.after(100, self._poll_queue)
 
     def _model_resolved(self) -> str:
-        manual = self._model_manual_var.get().strip()
-        if manual:
-            return manual
-        v = self._model_var.get().strip()
-        if v.startswith("—") or v == "":
-            return DEFAULT_MODEL
-        return v
+        return resolve_ui_model(
+            manual=self._model_manual_var.get(),
+            combo=self._model_var.get(),
+            profile_model=self._active_profile().model,
+            saved_selected=str(getattr(self, "_saved_model_selected", "") or ""),
+            default=DEFAULT_MODEL,
+        )
+
+    def _sort_uses_lm_studio(self, tag_mode: TagMode) -> bool:
+        if tag_mode == TagMode.HYBRID:
+            return bool(self._resolved_fast_classify_settings().vlm_fallback)
+        return tag_mode in (TagMode.PRESET, TagMode.FREE, TagMode.AUTO, TagMode.CUSTOM)
+
+    def _resolve_lm_model_for_sort(self, api_base: str) -> tuple[str | None, str]:
+        """Validate and canonicalize LM Studio model id; may auto-pick a loaded instance."""
+        model = self._model_resolved()
+        api_key = self._api_key_resolved()
+        ok, err = validate_model_for_sort(api_base, model, api_key=api_key)
+        if ok:
+            return canonical_model_id(api_base, model, api_key=api_key), ""
+        loaded = pick_best_loaded_model_key(
+            api_base, api_key=api_key, prefer=model, vision_only=True
+        )
+        if loaded:
+            self._model_var.set(loaded)
+            self._model_manual_var.set("")
+            self._append_log(
+                f"LM Studio: вместо «{model}» используется загруженная модель «{loaded}»."
+            )
+            return canonical_model_id(api_base, loaded, api_key=api_key), ""
+        return None, err
 
     def _active_profile(self) -> ModelProfile:
         name = self._active_model_profile_var.get().strip() or "classifier"
@@ -859,8 +896,22 @@ class App(ctk.CTk):
         tb.configure(state="disabled")
         ctk.CTkButton(win, text=t("buttons.close"), command=win.destroy).pack(pady=(0, 12))
 
+    def _restore_model_combo_selection(self) -> None:
+        sel = self._model_var.get().strip()
+        if not is_valid_ui_model_id(sel):
+            sel = str(getattr(self, "_saved_model_selected", "") or "").strip()
+        if not is_valid_ui_model_id(sel):
+            return
+        vals = [v for v in (self._model_combo.cget("values") or []) if is_valid_ui_model_id(str(v))]
+        if sel not in vals:
+            vals.insert(0, sel)
+        self._model_combo.configure(values=vals or [sel])
+        self._model_var.set(sel)
+
     def _on_model_combo_change(self) -> None:
         self._vision_status.configure(text=t("lm.vision.unknown"), text_color=("gray30", "gray70"))
+        if is_valid_ui_model_id(self._model_var.get()):
+            self._saved_model_selected = self._model_var.get().strip()
         # If user explicitly picks model from dropdown, do not keep stale manual override.
         if self._model_manual_var.get().strip():
             self._model_manual_var.set("")
@@ -1019,6 +1070,11 @@ class App(ctk.CTk):
                     "output_dir": self._out_var.get().strip(),
                     "api_base": self._api_var.get().strip(),
                     "model_manual": self._model_manual_var.get().strip(),
+                    "model_selected": (
+                        self._model_var.get().strip()
+                        if is_valid_ui_model_id(self._model_var.get())
+                        else str(getattr(self, "_saved_model_selected", "") or "")
+                    ),
                     "active_model_profile": self._active_model_profile_var.get().strip(),
                     "model_profiles": profiles_to_settings(self._model_profiles),
                     "media_mode": self._media_mode_var.get().strip(),
@@ -1131,6 +1187,18 @@ class App(ctk.CTk):
             self._api_var.set(p.api_base)
         if p.model:
             self._model_manual_var.set(p.model)
+            if is_valid_ui_model_id(p.model):
+                vals = [
+                    v
+                    for v in (self._model_combo.cget("values") or [])
+                    if is_valid_ui_model_id(str(v))
+                ]
+                if p.model not in vals:
+                    vals.insert(0, p.model)
+                if vals:
+                    self._model_combo.configure(values=vals)
+                self._model_var.set(p.model)
+                self._saved_model_selected = p.model
         if p.prompt_extra:
             self._prompt_extra_var.set(p.prompt_extra)
         self._append_log(t("lm.profile.applied", name=p.name, model=p.model or DEFAULT_MODEL))
@@ -1256,14 +1324,39 @@ class App(ctk.CTk):
                 return
 
             def apply() -> None:
+                api_key = self._api_key_resolved()
+                prefer = self._model_resolved()
+                loaded_key = (
+                    pick_best_loaded_model_key(
+                        base, api_key=api_key, prefer=prefer, vision_only=True
+                    )
+                    if models
+                    else None
+                )
                 if models:
                     self._model_combo.configure(values=models)
-                    self._model_var.set(models[0])
+                    pick = None
+                    if is_valid_ui_model_id(prefer) and prefer in models:
+                        pick = prefer
+                    elif loaded_key and loaded_key in models:
+                        pick = loaded_key
+                    elif is_valid_ui_model_id(self._saved_model_selected):
+                        saved = self._saved_model_selected
+                        if saved in models:
+                            pick = saved
+                    if pick is None:
+                        pick = models[0]
+                    self._model_var.set(pick)
+                    self._saved_model_selected = pick
+                    self._model_manual_var.set("")
                 else:
                     self._model_combo.configure(values=["— сервер вернул пустой список —"])
                     self._model_var.set(self._model_combo.cget("values")[0])
                 self._vision_status.configure(text=t("lm.vision.unknown"), text_color=("gray30", "gray70"))
-                self._append_log(f"Загружено моделей: {len(models)}")
+                loaded_note = ""
+                if loaded_key and models and self._model_var.get().strip() == loaded_key:
+                    loaded_note = f", загружена в LM Studio: {loaded_key}"
+                self._append_log(f"Загружено моделей: {len(models)}{loaded_note}")
                 self._set_probe_busy(False)
 
             self.after(0, apply)
@@ -1381,7 +1474,6 @@ class App(ctk.CTk):
 
         _tag_store = load_tag_store()
         api_base = self._api_var.get().strip() or DEFAULT_API_BASE
-        model = self._model_resolved()
 
         try:
             media_mode = MediaScanMode(self._media_mode_var.get())
@@ -1414,6 +1506,19 @@ class App(ctk.CTk):
                 )
                 return
             self._append_log(status)
+
+        model = self._model_resolved()
+        if self._sort_uses_lm_studio(tag_mode):
+            resolved, lm_err = self._resolve_lm_model_for_sort(api_base)
+            if lm_err:
+                self._append_log(f"Ошибка LM Studio: {lm_err}")
+                self._append_log(
+                    "Подсказка: в LM Studio загрузите vision-модель, нажмите «Обновить список моделей», "
+                    "выберите её в списке и при необходимости «Самотест API»."
+                )
+                return
+            model = resolved or model
+            self._append_log(f"LM Studio: модель «{model}»")
 
         user_context = tag_cfg.user_context
         session_key = self._sort_session_key_for_current(in_path, out_path, media_mode, tag_mode_str)

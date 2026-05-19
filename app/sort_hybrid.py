@@ -11,8 +11,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
 
 from app.category_aliases import resolve_storage_category
 from app.classification_result import ClassificationResult
@@ -121,7 +119,9 @@ def run_hybrid_sort(
 
     vlm_enabled = bool(settings.vlm_fallback)
     if vlm_enabled:
-        if not _probe_lm_studio(_get_api_base(), timeout=2.5):
+        if not _probe_lm_studio(
+            _get_api_base(), api_key=worker.api_key, timeout=2.5
+        ):
             worker._emit(
                 {
                     "type": "log",
@@ -543,14 +543,12 @@ def run_hybrid_sort(
     return "stopped" if worker._stop.is_set() else "completed"
 
 
-def _probe_lm_studio(api_base: str, *, timeout: float = 2.5) -> bool:
-    try:
-        parts = urlsplit(api_base or "")
-        if not parts.scheme or not parts.netloc:
-            return False
-        base = f"{parts.scheme}://{parts.netloc}"
-        req = Request(f"{base}/v1/models", method="GET")
-        with urlopen(req, timeout=timeout) as resp:
-            return 200 <= resp.status < 500
-    except Exception:
-        return False
+def _probe_lm_studio(
+    api_base: str,
+    *,
+    api_key: str | None = None,
+    timeout: float = 2.5,
+) -> bool:
+    from app.lm_studio import lm_studio_reachable
+
+    return lm_studio_reachable(api_base, api_key=api_key, timeout=timeout)

@@ -1476,6 +1476,172 @@ def vision_hint_from_model_dict(obj: dict[str, Any]) -> bool | None:
     return None
 
 
+def is_valid_ui_model_id(model: str) -> bool:
+    """False for empty strings and combo placeholders (not real LM Studio ids)."""
+    m = str(model or "").strip()
+    if not m:
+        return False
+    if m.startswith("—") or m.startswith("–"):
+        return False
+    low = m.lower()
+    if "нажмите" in low or "пустой список" in low or "placeholder" in low:
+        return False
+    return True
+
+
+def resolve_ui_model(
+    *,
+    manual: str = "",
+    combo: str = "",
+    profile_model: str = "",
+    saved_selected: str = "",
+    default: str = DEFAULT_MODEL,
+) -> str:
+    """
+    Pick LM Studio model id from GUI fields.
+
+    Combo selection wins over stale manual defaults such as profile «local-model».
+    """
+    manual_s = str(manual or "").strip()
+    combo_s = str(combo or "").strip()
+    profile_s = str(profile_model or "").strip()
+    saved_s = str(saved_selected or "").strip()
+
+    combo_ok = is_valid_ui_model_id(combo_s)
+    manual_ok = is_valid_ui_model_id(manual_s)
+    profile_ok = is_valid_ui_model_id(profile_s)
+    saved_ok = is_valid_ui_model_id(saved_s)
+
+    if combo_ok:
+        if manual_ok and manual_s != default:
+            return manual_s
+        return combo_s
+    if manual_ok:
+        return manual_s
+    if profile_ok and profile_s != default:
+        return profile_s
+    if saved_ok:
+        return saved_s
+    if profile_ok:
+        return profile_s
+    return default
+
+
+def canonical_model_id(
+    api_base: str,
+    model: str,
+    *,
+    api_key: str | None = None,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> str:
+    """Return exact model id from /v1/models when the user id differs only by case."""
+    mid = str(model or "").strip()
+    if not mid:
+        return mid
+    try:
+        models = list_models(api_base, api_key=api_key, timeout=timeout)
+    except Exception:
+        return mid
+    if mid in models:
+        return mid
+    lower = {m.lower(): m for m in models}
+    return lower.get(mid.lower(), mid)
+
+
+def pick_best_loaded_model_key(
+    api_base: str,
+    *,
+    api_key: str | None = None,
+    prefer: str = "",
+    vision_only: bool = True,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> str | None:
+    """Prefer a loaded LM Studio instance (vision-capable when vision_only)."""
+    try:
+        rows = loaded_model_instances(api_base, api_key=api_key, timeout=timeout)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    prefer_s = str(prefer or "").strip()
+    keys: list[str] = []
+    vision_keys: list[str] = []
+    for row in rows:
+        key = str(row.get("model_key") or "").strip()
+        if not key:
+            continue
+        keys.append(key)
+        if row.get("vision") is not False:
+            vision_keys.append(key)
+    pool = vision_keys if vision_only and vision_keys else keys
+    if not pool:
+        return None
+    if prefer_s:
+        for key in pool:
+            if key == prefer_s or key.lower() == prefer_s.lower():
+                return key
+    return pool[0]
+
+
+def validate_model_for_sort(
+    api_base: str,
+    model: str,
+    *,
+    api_key: str | None = None,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> tuple[bool, str]:
+    """Check that the resolved model id exists before starting a sort that calls LM Studio."""
+    if not is_valid_ui_model_id(model):
+        return (
+            False,
+            "Модель не выбрана. Нажмите «Обновить список моделей» и выберите загруженную "
+            "vision-модель, либо введите её ID вручную.",
+        )
+    if model.strip() == DEFAULT_MODEL:
+        return (
+            False,
+            f"Используется placeholder «{DEFAULT_MODEL}» — в LM Studio загрузите модель и "
+            "выберите её в списке (не оставляйте подсказку «— нажмите Обновить…»).",
+        )
+    try:
+        models = list_models(api_base, api_key=api_key, timeout=timeout)
+    except Exception as e:
+        return False, f"LM Studio недоступен ({normalize_api_base(api_base)}): {e!s}"
+
+    canonical = canonical_model_id(api_base, model, api_key=api_key, timeout=timeout)
+    if canonical in models:
+        return True, ""
+    if find_model_object(api_base, canonical, api_key=api_key, timeout=timeout) is not None:
+        return True, ""
+
+    loaded = pick_best_loaded_model_key(
+        api_base, api_key=api_key, prefer=canonical, vision_only=False, timeout=timeout
+    )
+    if loaded and (loaded in models or loaded == canonical):
+        return True, ""
+
+    sample = ", ".join(models[:4]) + ("…" if len(models) > 4 else "")
+    return (
+        False,
+        f"Модель «{model}» не найдена в /v1/models ({len(models)} шт.). "
+        f"Загрузите модель в LM Studio и обновите список. Доступно: {sample or '—'}",
+    )
+
+
+def lm_studio_reachable(
+    api_base: str,
+    *,
+    api_key: str | None = None,
+    timeout: float = API_PROBE_TIMEOUT_SEC,
+) -> bool:
+    """True when GET /v1/models succeeds (respects API key)."""
+    try:
+        list_models(api_base, api_key=api_key, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def find_model_object(
     api_base: str,
     model_id: str,
