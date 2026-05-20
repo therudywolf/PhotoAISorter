@@ -148,6 +148,7 @@ class App(ctk.CTk):
         super().__init__()
         self.title("Photo AI Sorter")
         self.geometry("920x780")
+        self.minsize(820, 600)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
@@ -518,7 +519,7 @@ class App(ctk.CTk):
 
         row_api = ctk.CTkFrame(lm, fg_color="transparent")
         row_api.pack(fill="x", padx=8, pady=(0, 4))
-        ctk.CTkLabel(row_api, text="Базовый URL:", width=120, anchor="w").pack(side="left")
+        ctk.CTkLabel(row_api, text=t("lm.api_base"), width=120, anchor="w").pack(side="left")
         ctk.CTkEntry(row_api, textvariable=self._api_var, placeholder_text="http://host:port").pack(
             side="left", fill="x", expand=True, padx=(0, 8)
         )
@@ -527,17 +528,17 @@ class App(ctk.CTk):
 
         row_key = ctk.CTkFrame(lm, fg_color="transparent")
         row_key.pack(fill="x", padx=8, pady=(0, 4))
-        ctk.CTkLabel(row_key, text="API key:", width=120, anchor="w").pack(side="left")
+        ctk.CTkLabel(row_key, text=t("lm.api_key"), width=120, anchor="w").pack(side="left")
         ctk.CTkEntry(
             row_key,
             textvariable=self._api_key_var,
             show="*",
-            placeholder_text="LM Studio token; хранится локально, не в git",
+            placeholder_text=t("lm.api_key.placeholder"),
         ).pack(side="left", fill="x", expand=True)
 
         row_m = ctk.CTkFrame(lm, fg_color="transparent")
         row_m.pack(fill="x", padx=8, pady=(0, 4))
-        ctk.CTkLabel(row_m, text="Модель (список):", width=120, anchor="w").pack(side="left")
+        ctk.CTkLabel(row_m, text=t("lm.model_list"), width=120, anchor="w").pack(side="left")
         self._model_combo = ctk.CTkComboBox(
             row_m,
             values=[t("lm.models.placeholder")],
@@ -550,11 +551,11 @@ class App(ctk.CTk):
 
         row_manual = ctk.CTkFrame(lm, fg_color="transparent")
         row_manual.pack(fill="x", padx=8, pady=(0, 4))
-        ctk.CTkLabel(row_manual, text="Вручную (приоритет):", width=120, anchor="w").pack(side="left")
+        ctk.CTkLabel(row_manual, text=t("lm.model_manual"), width=120, anchor="w").pack(side="left")
         ctk.CTkEntry(
             row_manual,
             textvariable=self._model_manual_var,
-            placeholder_text="Если пусто — берётся из списка выше",
+            placeholder_text=t("lm.model_manual.placeholder"),
         ).pack(side="left", fill="x", expand=True)
 
         row_profile = ctk.CTkFrame(lm, fg_color="transparent")
@@ -571,7 +572,7 @@ class App(ctk.CTk):
         self._profile_combo.pack(side="left", padx=(0, 8))
         self._btn_profile_save = ctk.CTkButton(
             row_profile,
-            text="Профили…",
+            text=t("lm.profiles"),
             width=120,
             command=self._open_profile_manager,
         )
@@ -614,11 +615,11 @@ class App(ctk.CTk):
             text_color=("gray30", "gray70"),
         )
         self._vision_status.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self._btn_selftest = ctk.CTkButton(row_vis, text="Проверить API", width=140, command=self._on_self_test)
+        self._btn_selftest = ctk.CTkButton(row_vis, text=t("lm.check_api"), width=140, command=self._on_self_test)
         self._btn_selftest.pack(side="left", padx=(0, 8))
         self._btn_loaded_models = ctk.CTkButton(
             row_vis,
-            text="Модели в памяти",
+            text=t("lm.models_in_memory"),
             width=145,
             fg_color=("gray75", "gray30"),
             command=self._on_loaded_models,
@@ -627,9 +628,9 @@ class App(ctk.CTk):
 
         ctx_row = ctk.CTkFrame(P, fg_color="transparent")
         ctx_row.pack(fill="x", padx=12, pady=(0, 2))
-        ctk.CTkLabel(ctx_row, text="Контекст для ИИ (USER_CONTEXT):", anchor="w").pack(side="left")
+        ctk.CTkLabel(ctx_row, text=t("ctx.user_context"), anchor="w").pack(side="left")
         ctk.CTkButton(
-            ctx_row, text="Теги...", width=80,
+            ctx_row, text=t("ctx.tags"), width=80,
             fg_color=("gray75", "gray30"),
             command=self._open_context_tags,
         ).pack(side="right")
@@ -656,7 +657,7 @@ class App(ctk.CTk):
         self._btn_start.pack(side="left", padx=(0, 8))
         self._btn_resume_sort = ctk.CTkButton(
             btns,
-            text="Продолжить сессию",
+            text=t("session.resume"),
             width=170,
             command=self._on_resume_last_sort,
             state="disabled",
@@ -999,7 +1000,7 @@ class App(ctk.CTk):
         win.grab_set()
 
         ctk.CTkLabel(
-            win, text="Выберите, что очистить:", font=ctk.CTkFont(size=14, weight="bold"),
+            win, text=t("cache.choose"), font=ctk.CTkFont(size=14, weight="bold"),
         ).pack(padx=16, pady=(16, 12))
 
         def do_sort() -> None:
@@ -1029,10 +1030,10 @@ class App(ctk.CTk):
 
         btns = ctk.CTkFrame(win, fg_color="transparent")
         btns.pack(fill="x", padx=16, pady=(0, 8))
-        ctk.CTkButton(btns, text="Кеш сортировки", width=180, command=do_sort).pack(fill="x", pady=(0, 6))
-        ctk.CTkButton(btns, text="Кеш дубликатов", width=180, command=do_dup).pack(fill="x", pady=(0, 6))
-        ctk.CTkButton(btns, text="Оба кеша", width=180, fg_color="darkred", command=do_both).pack(fill="x", pady=(0, 6))
-        ctk.CTkButton(win, text="Отмена", width=120, fg_color=("gray70", "gray35"), command=win.destroy).pack(pady=(0, 12))
+        ctk.CTkButton(btns, text=t("cache.sort"), width=180, command=do_sort).pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(btns, text=t("cache.dup"), width=180, command=do_dup).pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(btns, text=t("cache.both"), width=180, fg_color="darkred", command=do_both).pack(fill="x", pady=(0, 6))
+        ctk.CTkButton(win, text=t("buttons.cancel"), width=120, fg_color=("gray70", "gray35"), command=win.destroy).pack(pady=(0, 12))
 
     def _update_ffmpeg_hint(self) -> None:
         try:
@@ -1283,7 +1284,7 @@ class App(ctk.CTk):
         win.grab_set()
 
         ctk.CTkLabel(
-            win, text="Сохранённые профили", font=ctk.CTkFont(size=14, weight="bold"),
+            win, text=t("lm.profiles.saved_title"), font=ctk.CTkFont(size=14, weight="bold"),
         ).pack(padx=12, pady=(12, 6))
 
         tb = ctk.CTkTextbox(win, height=260, font=ctk.CTkFont(family="Consolas", size=12))
@@ -1293,7 +1294,7 @@ class App(ctk.CTk):
             tb.configure(state="normal")
             tb.delete("1.0", "end")
             if not self._model_profiles:
-                tb.insert("1.0", "Нет сохранённых профилей.")
+                tb.insert("1.0", t("lm.profiles.none"))
             else:
                 active = self._active_model_profile_var.get().strip()
                 for name in sorted(self._model_profiles):
@@ -1317,7 +1318,7 @@ class App(ctk.CTk):
 
         row_save = ctk.CTkFrame(win, fg_color="transparent")
         row_save.pack(fill="x", padx=12, pady=(0, 6))
-        ctk.CTkLabel(row_save, text="Сохранить текущие настройки как:", anchor="w").pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(row_save, text=t("lm.profiles.save_as"), anchor="w").pack(side="left", padx=(0, 8))
         name_var = ctk.StringVar(value=self._active_model_profile_var.get().strip() or "classifier")
         ctk.CTkEntry(row_save, textvariable=name_var, width=200).pack(side="left", padx=(0, 8))
 
@@ -1326,9 +1327,9 @@ class App(ctk.CTk):
             self._save_current_model_profile()
             refresh_list()
 
-        ctk.CTkButton(row_save, text="Сохранить", width=120, command=save).pack(side="left")
+        ctk.CTkButton(row_save, text=t("buttons.save"), width=120, command=save).pack(side="left")
 
-        ctk.CTkButton(win, text="Закрыть", width=120, command=win.destroy).pack(pady=(0, 12))
+        ctk.CTkButton(win, text=t("buttons.close"), width=120, command=win.destroy).pack(pady=(0, 12))
 
     def _pick_in(self) -> None:
         d = filedialog.askdirectory(title="Папка с файлами для сортировки")
@@ -1721,7 +1722,7 @@ class App(ctk.CTk):
             else:
                 self._total_files = total
                 self._prog_label.configure(text=f"{self._done_files} / {self._total_files}")
-            self._eta_label.configure(text="Осталось: —")
+            self._eta_label.configure(text=t("eta.left"))
             if self._total_files >= 50_000 and self._tag_mode_var.get() in {"auto", "free"}:
                 self._append_log(t("sort.warn_many_files_free", n=self._total_files))
         elif msg_type == "current":
