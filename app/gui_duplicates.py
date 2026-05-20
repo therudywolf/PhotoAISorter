@@ -5,18 +5,21 @@
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import threading
-import tkinter.messagebox as messagebox
-import json
 import time
+import tkinter.messagebox as messagebox
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import customtkinter as ctk
 
-from app.constants import DEFAULT_API_BASE, DEFAULT_MODEL, MediaScanMode, VIDEO_EXTENSIONS
+from app.constants import DEFAULT_API_BASE, DEFAULT_MODEL, VIDEO_EXTENSIONS, MediaScanMode
+from app.dup_export import export_duplicate_run
+from app.dup_thumbs import thumb_ctk as _thumb_ctk
+from app.dup_ui_constants import CTK_ACCENT_PRIMARY, CTK_ACCENT_PRIMARY_HOVER
 from app.duplicate_finder import (
     DuplicateFinderOptions,
     load_records_from_db,
@@ -26,14 +29,14 @@ from app.duplicate_finder import (
     options_to_dict,
     regroup_from_cached_records,
 )
-from app.dup_export import export_duplicate_run
-from app.dup_ui_constants import CTK_ACCENT_PRIMARY, CTK_ACCENT_PRIMARY_HOVER
-from app.dup_thumbs import thumb_ctk as _thumb_ctk
-from app.gui_dup_groups_window import DuplicateGroupsViewer
 from app.duplicate_worker import DuplicateFinderWorker
+from app.gui_dup_groups_window import DuplicateGroupsViewer
+from app.lm_studio import is_valid_ui_model_id, list_models
+from app.log_config import get_logger
 from app.settings_store import duplicate_journal_path
 from app.signature_db import SignatureDatabase, make_session_key
-from app.lm_studio import list_models
+
+_logger = get_logger(__name__)
 from app.ui_texts import t as ui_t
 from app.video_frames import resolve_ffmpeg_executable
 
@@ -249,13 +252,22 @@ class DuplicatesPane(ctk.CTkFrame):
         )
         self._dup_model_combo.pack(side="left", fill="x", expand=True, padx=(0, 8))
         row_dup_man = ctk.CTkFrame(llm_dup, fg_color="transparent")
-        row_dup_man.pack(fill="x", padx=8, pady=(0, 8))
+        row_dup_man.pack(fill="x", padx=8, pady=(0, 4))
         ctk.CTkLabel(row_dup_man, text="Вручную (приоритет):", width=120, anchor="w").pack(side="left")
         ctk.CTkEntry(
             row_dup_man,
             textvariable=self._dup_model_manual_var,
             placeholder_text="Если пусто — берётся из списка выше",
         ).pack(side="left", fill="x", expand=True)
+        row_dup_prof = ctk.CTkFrame(llm_dup, fg_color="transparent")
+        row_dup_prof.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(
+            row_dup_prof,
+            text=ui_t("dup.profile.verifier"),
+            width=240,
+            fg_color=("gray75", "gray30"),
+            command=self._apply_duplicate_verifier_profile,
+        ).pack(side="left")
 
         self._method_label = ctk.CTkLabel(
             top,
@@ -688,6 +700,29 @@ class DuplicatesPane(ctk.CTkFrame):
         self._llm_user_overridden = True
         self._on_preset_change()
 
+    def _apply_duplicate_verifier_profile(self) -> None:
+        prof = self._app._model_profiles.get("duplicate_verifier")
+        if prof is None:
+            messagebox.showwarning(ui_t("dup.profile.verifier"), "Профиль duplicate_verifier не найден.")
+            return
+        if prof.api_base:
+            self._dup_api_var.set(prof.api_base)
+        model = (prof.model or DEFAULT_MODEL).strip()
+        if model:
+            self._dup_model_manual_var.set(model)
+            if is_valid_ui_model_id(model):
+                vals = [
+                    v
+                    for v in (self._dup_model_combo.cget("values") or [])
+                    if is_valid_ui_model_id(str(v))
+                ]
+                if model not in vals:
+                    vals.insert(0, model)
+                if vals:
+                    self._dup_model_combo.configure(values=vals)
+                self._dup_model_var.set(model)
+        self._app._append_log(ui_t("dup.profile.verifier.applied", model=model or DEFAULT_MODEL))
+
     def _dup_model_resolved(self) -> str:
         manual = self._dup_model_manual_var.get().strip()
         if manual:
@@ -717,8 +752,8 @@ class DuplicatesPane(ctk.CTkFrame):
             self.after(0, lambda: self._set_dup_probe_busy(True))
             try:
                 models = list_models(base, api_key=self._app._api_key_resolved())
-            except Exception as e:
-                self.after(0, lambda: self._app._append_log(f"Дубликаты — список моделей: ошибка {e!s}"))
+            except Exception as exc:
+                self.after(0, lambda err=exc: self._app._append_log(f"Дубликаты — список моделей: ошибка {err!s}"))
                 self.after(0, lambda: self._set_dup_probe_busy(False))
                 return
 
@@ -1870,9 +1905,9 @@ class DuplicatesPane(ctk.CTkFrame):
         if vw is not None:
             try:
                 vw.destroy()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("duplicate viewer close: %s", exc)
         try:
             self._sig_db.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("signature db close: %s", exc)

@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
-from app.fast_classify.config import FastClassifySettings
 from app.fast_classify import weights as w
+from app.fast_classify.config import FastClassifySettings
 
 
 def test_ensure_clip_uses_cached_file(monkeypatch: object, tmp_path: Path) -> None:

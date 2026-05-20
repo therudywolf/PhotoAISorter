@@ -154,7 +154,7 @@ def pick_tag(
         "personal_user_nsfw_alt",
     )
     best_personal = max((working.get(t, 0.0) for t in personal if t in working), default=0.0)
-    if best_personal >= 0.12:
+    if best_personal >= 0.20:
         for t in ("human_real_sfw", "human_real_nsfw_female", "human_real_nsfw_male", "woman"):
             if t in working:
                 working[t] *= 0.45

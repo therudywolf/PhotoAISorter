@@ -32,7 +32,9 @@ class FastClassifySettings:
     min_margin: float = 0.11
     softmax_temperature: float = 0.055
     vlm_fallback: bool = True
-    exemplar_boost: float = 1.38
+    exemplar_boost: float = 1.22
+    min_exemplar_similarity: float = 0.32
+    exemplar_max_delta: float = 0.12
     text_prompt_fusion: float = 0.75
     text_prompt_max_pool: bool = True
     crop_score_max_pool: bool = True
@@ -73,7 +75,13 @@ class FastClassifySettings:
                 0.01, min(0.2, float(raw.get("softmax_temperature", 0.055)))
             ),
             vlm_fallback=bool(raw.get("vlm_fallback", True)),
-            exemplar_boost=max(1.0, min(2.5, float(raw.get("exemplar_boost", 1.38)))),
+            exemplar_boost=max(1.0, min(2.5, float(raw.get("exemplar_boost", 1.22)))),
+            min_exemplar_similarity=max(
+                0.15, min(0.55, float(raw.get("min_exemplar_similarity", 0.32)))
+            ),
+            exemplar_max_delta=max(
+                0.02, min(0.25, float(raw.get("exemplar_max_delta", 0.12)))
+            ),
             text_prompt_fusion=max(
                 0.0, min(1.0, float(raw.get("text_prompt_fusion", 0.75)))
             ),
@@ -108,6 +116,8 @@ class FastClassifySettings:
             "softmax_temperature": self.softmax_temperature,
             "vlm_fallback": self.vlm_fallback,
             "exemplar_boost": self.exemplar_boost,
+            "min_exemplar_similarity": self.min_exemplar_similarity,
+            "exemplar_max_delta": self.exemplar_max_delta,
             "text_prompt_fusion": self.text_prompt_fusion,
             "text_prompt_max_pool": self.text_prompt_max_pool,
             "crop_score_max_pool": self.crop_score_max_pool,

@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from app.constants import DEFAULT_API_KEY, GIF_EXTENSION, MediaScanMode, STILL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from app.constants import DEFAULT_API_KEY, GIF_EXTENSION, STILL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, MediaScanMode
 from app.duplicate_finder import (
     DuplicateFinderOptions,
     build_groups_from_records,

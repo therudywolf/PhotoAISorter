@@ -20,8 +20,11 @@ from app.fast_classify.registry import get_classifier
 from app.file_hash_cache import get_file_hash_cache
 from app.images import image_to_jpeg_base64_data_uri, video_contact_sheet_data_uri
 from app.lm_studio import chat_completion_cfg
+from app.log_config import get_logger
 from app.video_frames import extract_frames_reduced, is_animated_gif
 from app.worker import has_disk_space_for_copy, unique_dest_path
+
+_logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from app.worker import SortWorker
@@ -33,19 +36,39 @@ def _merge_vlm_with_clip(
     *,
     confidence_threshold: float,
 ) -> ClassificationResult:
-    """Prefer CLIP when VLM is weaker or only CLIP failed review margin."""
+    """Prefer CLIP unless VLM is clearly better (avoids default 0.55–0.75 VLM scores)."""
     if clip.category == UNCATEGORIZED:
-        return vlm
+        return vlm if vlm.category != UNCATEGORIZED else clip
     if vlm.category == UNCATEGORIZED:
         return clip
     if clip.confidence >= confidence_threshold and not clip.needs_review:
-        if vlm.confidence < clip.confidence + 0.04:
-            return clip
-    if clip.needs_review and vlm.confidence > clip.confidence + 0.06:
+        return clip
+    if clip.confidence >= confidence_threshold and clip.needs_review:
+        if vlm.confidence >= 0.82 and vlm.confidence > clip.confidence + 0.14:
+            return vlm
+        return clip
+    if "clip_low_sim" in (clip.reason_short or ""):
+        if vlm.confidence >= 0.65 and vlm.category != UNCATEGORIZED:
+            return vlm
+        return clip
+    if vlm.confidence >= 0.80 and vlm.confidence > clip.confidence + 0.15:
         return vlm
-    if vlm.confidence > clip.confidence + 0.08:
-        return vlm
-    return clip if clip.confidence >= vlm.confidence else vlm
+    return clip
+
+
+def _clip_needs_vlm_fallback(
+    result: ClassificationResult,
+    *,
+    confidence_threshold: float,
+) -> bool:
+    """Do not send every needs_review file to VLM — only low-confidence / unknown."""
+    if result.category == UNCATEGORIZED:
+        return True
+    if "clip_low_sim" in (result.reason_short or ""):
+        return True
+    if result.confidence < confidence_threshold * 0.9:
+        return True
+    return False
 
 
 def _vlm_via_uri(
@@ -421,8 +444,8 @@ def run_hybrid_sort(
 
             vlm_items: list[tuple[dict[str, Any], ClassificationResult]] = []
             for item, result in zip(chunk, results):
-                if vlm_enabled and (
-                    result.needs_review or result.category == UNCATEGORIZED
+                if vlm_enabled and _clip_needs_vlm_fallback(
+                    result, confidence_threshold=settings.confidence_threshold
                 ):
                     vlm_items.append((item, result))
                 else:
@@ -506,8 +529,8 @@ def run_hybrid_sort(
 
             result = clip_res
             via = "clip"
-            if vlm_enabled and (
-                clip_res.needs_review or clip_res.category == UNCATEGORIZED
+            if vlm_enabled and _clip_needs_vlm_fallback(
+                clip_res, confidence_threshold=settings.confidence_threshold
             ):
                 try:
                     vlm_res = _vlm_classify(
@@ -538,8 +561,8 @@ def run_hybrid_sort(
         try:
             with worker.db._lock:
                 worker.db._maybe_commit(force=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.warning("hybrid sort final commit failed: %s", exc)
     return "stopped" if worker._stop.is_set() else "completed"
 
 

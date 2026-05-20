@@ -2,7 +2,6 @@
 # Copyright (C) 2026 Photo AI Sorter contributors — see NOTICE
 
 import numpy as np
-
 from app.fast_classify.scoring import confidence_from_probs, needs_review, softmax_probs
 
 

@@ -17,7 +17,6 @@ from app.lm_studio import CUSTOM_CLASSIFICATION_GUIDANCE, build_system_prompt
 from app.tag_config import TagMode, resolve_tag_config
 from app.worker import SortWorker
 
-
 FOREST_SAMPLE_WL = frozenset(
     {
         "iam",

@@ -14,11 +14,7 @@ from enum import Enum
 from typing import Any
 
 from app.constants import (
-    CATEGORIES,
     CATEGORY_PROMPTS,
-    GENERAL_CATEGORIES,
-    GENERAL_CATEGORY_WHITELIST,
-    CANONICAL_CATEGORY_WHITELIST,
     PRIORITY_RULES_BLOCK,
     TAG_MERGE_PRIORITY,
     UNCATEGORIZED,
@@ -68,7 +64,12 @@ def resolve_tag_config(
     user_context_override: str = "",
 ) -> ResolvedTagConfig:
     """Build a complete tag config from mode + profile + optional custom TagStore."""
-    from app.context_tags import get_active_set, build_custom_categories, build_custom_prompts, build_user_context_from_tags
+    from app.context_tags import (
+        build_custom_categories,
+        build_custom_prompts,
+        build_user_context_from_tags,
+        get_active_set,
+    )
 
     if mode in (TagMode.CUSTOM, TagMode.HYBRID):
         if tag_store is None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from app.fast_classify.scoring import raw_similarity_margin, topk_softmax_probs
 
 

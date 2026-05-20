@@ -3,12 +3,12 @@
 
 """Media file iteration by scan mode."""
 
-from pathlib import Path
-from queue import Queue
 import threading
 import time
+from pathlib import Path
+from queue import Queue
 
-from app.constants import MediaScanMode, PIPELINE_VERSION
+from app.constants import PIPELINE_VERSION, MediaScanMode
 from app.db import Database, make_sort_session_key
 from app.images import file_sha256
 from app.worker import SortWorker, iter_media_files
@@ -30,7 +30,7 @@ def test_iter_video_only(tmp_path: Path) -> None:
     assert out[0].suffix.lower() == ".mp4"
 
 
-def test_sort_worker_clamps_workers_1_to_4(tmp_path: Path) -> None:
+def test_sort_worker_clamps_workers_1_to_16(tmp_path: Path) -> None:
     db = Database(tmp_path / "state.sqlite3")
     q = Queue()
     w0 = SortWorker(db, q, api_base="http://x", model="m", workers=0)

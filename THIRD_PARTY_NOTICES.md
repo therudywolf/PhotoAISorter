@@ -12,10 +12,14 @@ Runtime dependencies:
 - ImageHash
 - NumPy
 - Send2Trash
+- PyTorch
+- open-clip-torch
+- windnd (Windows only)
 
 Development dependencies:
 
 - pytest
+- ruff
 
 Licenses for these packages are provided by their upstream projects and by the installed wheel metadata in your Python environment.
 

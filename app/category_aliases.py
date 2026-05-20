@@ -12,6 +12,18 @@ from typing import Any
 
 from app.db import default_db_path
 
+# Virtual CLIP tags (separate refs folders) map to parent on-disk sort folders.
+BUILTIN_STORAGE_ALIASES: dict[str, str] = {
+    "iam_face": "iam",
+    "iam_body": "iam",
+    "iam_tattoo": "iam",
+    "my_dog_closeup": "my_dog",
+    "my_dog_fullbody": "my_dog",
+    "my_dog_alt": "my_dog",
+    "my_cat_closeup": "my_cat",
+    "my_cat_fullbody": "my_cat",
+}
+
 _ALIAS_KEY_RE = re.compile(r"[^a-z0-9_/\-\s]+")
 _SPACES_DASH_RE = re.compile(r"[\s\-]+")
 _UNDERSCORE_RE = re.compile(r"_+")
@@ -70,7 +82,9 @@ def resolve_storage_category(category: str, aliases: dict[str, str] | None = Non
     if not key:
         return category
     normalized = normalize_aliases(aliases or {})
-    return normalized.get(key, key)
+    if key in normalized:
+        return normalized[key]
+    return BUILTIN_STORAGE_ALIASES.get(key, key)
 
 
 def aliases_to_prompt_lines(aliases: dict[str, str]) -> str:

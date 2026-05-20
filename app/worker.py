@@ -11,9 +11,10 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from app.categorizer import merge_tags_by_priority, normalize_tag, normalize_tag_auto, normalize_tag_free
 from app.category_aliases import aliases_to_prompt_lines, resolve_storage_category
@@ -25,16 +26,15 @@ from app.constants import (
     ETA_ROLLING_WINDOW,
     GENERAL_CATEGORY_WHITELIST,
     GIF_EXTENSION,
-    MediaScanMode,
     PIPELINE_VERSION,
     STILL_IMAGE_EXTENSIONS,
     UNCATEGORIZED,
     VIDEO_EXTENSIONS,
     VIDEO_FRAME_COUNT,
+    MediaScanMode,
 )
 from app.db import Database, make_sort_session_key
 from app.images import (
-    file_sha256,
     image_to_jpeg_base64_data_uri,
     pil_image_to_jpeg_data_uri,
     video_contact_sheet_data_uri,
@@ -42,13 +42,11 @@ from app.images import (
 from app.lm_studio import (
     CHAT_COMPLETION_MAX_TOKENS,
     EndpointPool,
-    chat_completion,
     chat_completion_cfg,
-    chat_completion_multi_cfg,
     classify_frames_cfg,
 )
 from app.review_manifest import SortReviewManifest
-from app.tag_config import TagMode, ResolvedTagConfig
+from app.tag_config import ResolvedTagConfig, TagMode
 from app.task_state import TaskState
 from app.video_frames import extract_frames_reduced, is_animated_gif
 
@@ -97,15 +95,16 @@ def _disk_usage_root(path: Path) -> Path:
 
 
 def has_disk_space_for_copy(dest_dir: Path, source_file: Path, margin: int = COPY_FREE_MARGIN_BYTES) -> bool:
+    """Return False when free space is insufficient or cannot be determined (fail closed)."""
     try:
         need = int(source_file.stat().st_size)
     except OSError:
-        return True
+        return False
     root = _disk_usage_root(dest_dir)
     try:
         free = shutil.disk_usage(root).free
     except OSError:
-        return True
+        return False
     return free >= need + margin
 
 
@@ -126,7 +125,6 @@ def unique_dest_path(dest_dir: Path, filename: str) -> Path:
 
 def _tag_mode_for_session(cfg) -> str:
     """Serialize tag config mode + profile into a session-storable string."""
-    from app.constants import SearchProfile
     if cfg.mode == TagMode.PRESET:
         return f"preset_{cfg.profile.value}"
     return cfg.mode.value

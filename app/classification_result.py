@@ -5,14 +5,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.categorizer import normalize_tag, normalize_tag_auto, normalize_tag_free
-from app.constants import CANONICAL_CATEGORY_WHITELIST, GENERAL_CATEGORY_WHITELIST
-from app.constants import UNCATEGORIZED
+from app.constants import CANONICAL_CATEGORY_WHITELIST, GENERAL_CATEGORY_WHITELIST, UNCATEGORIZED
 
 TagMode = Literal["strict", "general", "auto", "free", "preset", "custom", "hybrid"]
 
@@ -133,7 +132,7 @@ def parse_classification_result(
 
     if obj is None:
         category = _normalize(text, mode, aliases, whitelist=whitelist)
-        confidence = 0.75 if category != UNCATEGORIZED else 0.0
+        confidence = 0.55 if category != UNCATEGORIZED else 0.0
         return ClassificationResult(
             category=category,
             candidates=[category] if category != UNCATEGORIZED else [],
@@ -161,7 +160,7 @@ def parse_classification_result(
             candidates.append(norm)
     if category == UNCATEGORIZED and candidates:
         category = candidates[0]
-    confidence = _clamp_confidence(obj.get("confidence"), 0.75 if category != UNCATEGORIZED else 0.0)
+    confidence = _clamp_confidence(obj.get("confidence"), 0.55 if category != UNCATEGORIZED else 0.0)
     reason = str(obj.get("reasoning") or obj.get("reason_short") or obj.get("reason") or "").strip()[:240]
     explicit_review = obj.get("needs_review")
     needs_review_flag = bool(explicit_review) if isinstance(explicit_review, bool) else False

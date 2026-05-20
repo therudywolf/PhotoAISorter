@@ -11,6 +11,10 @@ from pathlib import Path
 
 import numpy as np
 
+from app.log_config import get_logger
+
+_logger = get_logger(__name__)
+
 from app.paths import clip_embedding_cache_path, migrate_app_state_to_project_tmp
 
 _SCHEMA = """
@@ -90,8 +94,8 @@ class EmbeddingCache:
         with self._lock:
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("embedding cache close: %s", exc)
 
 
 def model_cache_key(settings) -> str:  # type: ignore[no-untyped-def]
@@ -105,8 +109,11 @@ def model_cache_key(settings) -> str:  # type: ignore[no-untyped-def]
     tp_max = int(bool(getattr(settings, "text_prompt_max_pool", False)))
     crop_pool = int(bool(getattr(settings, "crop_score_max_pool", False)))
     top_k = int(getattr(settings, "top_k_softmax", 10))
+    ex_min = float(getattr(settings, "min_exemplar_similarity", 0.32))
+    ex_delta = float(getattr(settings, "exemplar_max_delta", 0.12))
+    ex_boost = float(getattr(settings, "exemplar_boost", 1.22))
     return (
         f"{settings.model_name}|{settings.pretrained}|{device}|fp16={fp16}"
         f"|side={side}|crops={crops}|tf={fusion:.2f}|tpmax={tp_max}|cpool={crop_pool}"
-        f"|topk={top_k}"
+        f"|topk={top_k}|ex={ex_min:.2f}:{ex_delta:.2f}:{ex_boost:.2f}"
     )

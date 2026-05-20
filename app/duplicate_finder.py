@@ -16,7 +16,7 @@ from typing import Any, Literal
 import imagehash
 from PIL import Image
 
-from app.constants import GIF_EXTENSION, MediaScanMode, STILL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from app.constants import GIF_EXTENSION, STILL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, MediaScanMode
 from app.images import _pil_to_rgb, file_sha256
 from app.signature_db import SIG_CACHE_VERSION, SignatureDatabase
 from app.video_frames import extract_frames_reduced, is_animated_gif

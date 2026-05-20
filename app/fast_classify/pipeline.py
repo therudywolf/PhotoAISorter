@@ -175,29 +175,38 @@ class FastClassifier:
                 out[:, tag_idx] = prompt_sims[:, mask].max(axis=1)
         return out
 
-    def _raw_sims_batch(self, feats: np.ndarray) -> np.ndarray:
-        """Cosine similarity (B, num_tags). Per-tag exemplar boost = max similarity to any exemplar."""
+    def _raw_sims_batch(self, feats: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Cosine similarity (B, num_tags).
+
+        Exemplars add a small capped delta on top of text similarity (not multiplicative
+        replacement), so tags with refs do not dominate tags without refs.
+        """
         text_sims = self._text_similarities(feats)
         sims = text_sims.copy()
         if self._exemplar_matrix.shape[0] == 0:
-            return sims
-        boost = self.settings.exemplar_boost
-        ex_sims = feats @ self._exemplar_matrix.T  # (B, N_exemplars)
+            return sims, text_sims
+        min_sim = float(getattr(self.settings, "min_exemplar_similarity", 0.32))
+        max_delta = float(getattr(self.settings, "exemplar_max_delta", 0.12))
+        scale = max(0.0, float(self.settings.exemplar_boost) - 1.0)
+        ex_sims = feats @ self._exemplar_matrix.T
         for tag_idx in range(len(self._tags)):
             mask = self._exemplar_owner == tag_idx
             if not mask.any():
                 continue
-            col = ex_sims[:, mask]
-            best = col.max(axis=1) * boost
-            top3 = np.partition(col, -min(3, col.shape[1]), axis=1)[:, -min(3, col.shape[1]) :]
-            mean_top = top3.mean(axis=1) * (boost * 0.92)
-            blended = np.maximum(best, mean_top)
-            sims[:, tag_idx] = np.maximum(sims[:, tag_idx], blended)
-        return sims
+            best_raw = ex_sims[:, mask].max(axis=1)
+            delta = np.maximum(0.0, best_raw - min_sim) * scale
+            delta = np.minimum(delta, max_delta)
+            sims[:, tag_idx] = np.minimum(1.0, sims[:, tag_idx] + delta)
+        return sims, text_sims
 
 
     def _result_from_sims_row(
-        self, sims_row: np.ndarray, *, embedding_failed: bool = False
+        self,
+        sims_row: np.ndarray,
+        *,
+        text_sims_row: np.ndarray | None = None,
+        embedding_failed: bool = False,
     ) -> ClassificationResult:
         if embedding_failed:
             return ClassificationResult(
@@ -243,6 +252,12 @@ class FastClassifier:
         if tag == UNCATEGORIZED:
             top_prob = max(scores.values()) if scores else 0.0
             review = True
+        if text_sims_row is not None and tag in self._tags:
+            tag_idx = self._tags.index(tag)
+            ex_delta = float(sims_row[tag_idx] - text_sims_row[tag_idx])
+            text_score = float(text_sims_row[tag_idx])
+            if ex_delta >= 0.045 and text_score < 0.24:
+                review = True
         return ClassificationResult(
             category=tag,
             candidates=candidates,
@@ -271,9 +286,11 @@ class FastClassifier:
                 ),
                 raw_text="",
             )
-        sims_row, feat = self._encode_image_sims_and_feature(im)
+        sims_row, text_row, feat = self._encode_image_sims_and_feature(im)
         failed = float(np.linalg.norm(feat)) <= 1e-8
-        return self._result_from_sims_row(sims_row, embedding_failed=failed)
+        return self._result_from_sims_row(
+            sims_row, text_sims_row=text_row, embedding_failed=failed
+        )
 
     def classify_path(self, path: Path) -> ClassificationResult:
         im = load_image_rgb(path, max_side=self.settings.image_max_side)
@@ -295,22 +312,30 @@ class FastClassifier:
         ):
             frame_sims: list[np.ndarray] = []
             any_feat = False
+            frame_text: list[np.ndarray] = []
             for frame in frames:
-                sims_row, feat = self._encode_image_sims_and_feature(frame)
+                sims_row, text_row, feat = self._encode_image_sims_and_feature(frame)
                 if float(np.linalg.norm(feat)) > 1e-8:
                     any_feat = True
                 frame_sims.append(sims_row)
+                frame_text.append(text_row)
             if not frame_sims or not any_feat:
                 return ClassificationResult(UNCATEGORIZED, [], 0.0, "no_feats", True, "")
             sims_row = np.max(np.stack(frame_sims, axis=0), axis=0)
-            return self._result_from_sims_row(sims_row, embedding_failed=not any_feat)
+            text_row = np.max(np.stack(frame_text, axis=0), axis=0)
+            return self._result_from_sims_row(
+                sims_row, text_sims_row=text_row, embedding_failed=not any_feat
+            )
         feats = self._encode_image_features_batch(frames)
         if feats.shape[0] == 0:
             return ClassificationResult(UNCATEGORIZED, [], 0.0, "no_feats", True, "")
-        sims_per_frame = self._raw_sims_batch(feats)
+        sims_per_frame, text_per_frame = self._raw_sims_batch(feats)
         sims_row = sims_per_frame.max(axis=0)
+        text_row = text_per_frame.max(axis=0)
         failed = bool(_embedding_rows_failed(feats).any())
-        return self._result_from_sims_row(sims_row, embedding_failed=failed)
+        return self._result_from_sims_row(
+            sims_row, text_sims_row=text_row, embedding_failed=failed
+        )
 
     def classify_batch(
         self,
@@ -325,7 +350,7 @@ class FastClassifier:
         clip_images: list[Image.Image] = []
         clip_digests: list[str | None] = []
         cached_feats: dict[int, np.ndarray] = {}
-        cached_sims: dict[int, np.ndarray] = {}
+        cached_sims: dict[int, tuple[np.ndarray, np.ndarray]] = {}
 
         workers = min(max(1, self.settings.prefetch_workers), max(1, len(paths)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -383,8 +408,10 @@ class FastClassifier:
             )
             if use_crop_pool:
                 for j, idx in enumerate(clip_indices):
-                    sims_row, feat = self._encode_image_sims_and_feature(clip_images[j])
-                    cached_sims[idx] = sims_row
+                    sims_row, text_row, feat = self._encode_image_sims_and_feature(
+                        clip_images[j]
+                    )
+                    cached_sims[idx] = (sims_row, text_row)
                     cached_feats[idx] = feat
                     d = clip_digests[j]
                     if d and float(np.linalg.norm(feat)) > 1e-8:
@@ -399,19 +426,23 @@ class FastClassifier:
                     cached_feats[idx] = feats[j]
 
         if cached_sims:
-            for idx, sims_row in cached_sims.items():
-                results[idx] = self._result_from_sims_row(sims_row, embedding_failed=False)
+            for idx, (sims_row, text_row) in cached_sims.items():
+                results[idx] = self._result_from_sims_row(
+                    sims_row, text_sims_row=text_row, embedding_failed=False
+                )
 
         if cached_feats:
             order = sorted(cached_feats.keys())
             stacked = np.stack([cached_feats[i] for i in order], axis=0)
-            sims = self._raw_sims_batch(stacked)
+            sims, text_sims = self._raw_sims_batch(stacked)
             failed_rows = _embedding_rows_failed(stacked)
             for k, idx in enumerate(order):
                 if results[idx] is not None:
                     continue
                 results[idx] = self._result_from_sims_row(
-                    sims[k], embedding_failed=failed_rows[k]
+                    sims[k],
+                    text_sims_row=text_sims[k],
+                    embedding_failed=failed_rows[k],
                 )
 
         if new_feats_to_store and self._cache is not None:
@@ -429,32 +460,39 @@ class FastClassifier:
         ]
 
 
-    def _encode_image_sims_and_feature(self, im: Image.Image) -> tuple[np.ndarray, np.ndarray]:
+    def _encode_image_sims_and_feature(
+        self, im: Image.Image
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         dim = self._text_matrix.shape[1]
+        n_tags = len(self._tags)
         if not self.settings.multi_crop or int(self.settings.multi_crop_views) <= 1:
             feats = self._embedder.encode_images([im], micro_batch=1)
             if feats.shape[0] == 0:
-                return np.zeros((len(self._tags),), dtype=np.float32), np.zeros((dim,), dtype=np.float32)
-            sims = self._raw_sims_batch(feats)[0]
-            return sims, feats[0]
+                z = np.zeros((n_tags,), dtype=np.float32)
+                return z, z, np.zeros((dim,), dtype=np.float32)
+            sims, text_sims = self._raw_sims_batch(feats)
+            return sims[0], text_sims[0], feats[0]
         crops = multi_crop_views(im, views=int(self.settings.multi_crop_views))
         crop_feats = self._embedder.encode_images(crops, micro_batch=self.settings.batch_size)
         if crop_feats.shape[0] == 0:
-            return np.zeros((len(self._tags),), dtype=np.float32), np.zeros((dim,), dtype=np.float32)
-        sims = self._raw_sims_batch(crop_feats.astype(np.float32))
+            z = np.zeros((n_tags,), dtype=np.float32)
+            return z, z, np.zeros((dim,), dtype=np.float32)
+        sims, text_sims = self._raw_sims_batch(crop_feats.astype(np.float32))
         if getattr(self.settings, "crop_score_max_pool", False) and sims.shape[0] > 1:
             sims_row = sims.max(axis=0)
+            text_row = text_sims.max(axis=0)
         else:
             sims_row = sims[0]
+            text_row = text_sims[0]
         feat = _fuse_crop_features(crop_feats, sims)
-        return sims_row, feat
+        return sims_row, text_row, feat
 
     def _encode_image_features_batch(self, images: list[Image.Image]) -> np.ndarray:
         if not images:
             return np.zeros((0, self._text_matrix.shape[1]), dtype=np.float32)
         rows: list[np.ndarray] = []
         for im in images:
-            _, feat = self._encode_image_sims_and_feature(im)
+            _, _, feat = self._encode_image_sims_and_feature(im)
             rows.append(feat)
         return np.stack(rows, axis=0)
 

@@ -9,12 +9,11 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
-from PIL import Image
-
 from app.fast_classify.config import FastClassifySettings
 from app.fast_classify.pipeline import FastClassifier
 from app.fast_classify.registry import clear_classifier_cache, get_classifier
 from app.tag_config import ResolvedTagConfig, TagMode
+from PIL import Image
 
 
 class _MockEmbedder:

@@ -7,10 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import imagehash
-from PIL import Image
-
+import pytest
 from app.duplicate_finder import (
     DuplicateFinderOptions,
     FileDupInfo,
@@ -20,6 +18,7 @@ from app.duplicate_finder import (
     regroup_from_cached_records,
 )
 from app.signature_db import SIG_CACHE_VERSION, SignatureDatabase
+from PIL import Image
 
 
 def _solid_png(path: Path, rgb: tuple[int, int, int] = (200, 100, 50)) -> None:

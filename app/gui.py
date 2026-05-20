@@ -16,31 +16,24 @@ import customtkinter as ctk
 
 from app.cache_service import CacheService
 from app.category_aliases import load_category_aliases
+from app.constants import (
+    DEFAULT_API_BASE,
+    DEFAULT_API_KEY,
+    DEFAULT_MODEL,
+    GENERAL_CATEGORIES,
+    LOG_MAX_LINES,
+    PIPELINE_VERSION,
+    MediaScanMode,
+)
 from app.context_tags import (
     build_custom_categories,
     build_user_context_from_tags,
     get_active_set,
     load_tag_store,
 )
-from app.fast_classify.config import load_fast_classify_settings
-from app.tag_config import TagMode, ResolvedTagConfig, resolve_tag_config
-from app.constants import (
-    CANONICAL_CATEGORIES,
-    DEFAULT_API_BASE,
-    DEFAULT_API_KEY,
-    DEFAULT_MODEL,
-    GENERAL_CATEGORIES,
-    LOG_MAX_LINES,
-    MediaScanMode,
-    PIPELINE_VERSION,
-)
 from app.db import Database, make_sort_session_key
+from app.fast_classify.config import load_fast_classify_settings
 from app.gui_duplicates import DuplicatesPane
-from app.model_profiles import ModelProfile, merge_profiles, profiles_to_settings
-from app.settings_store import load_gui_settings, load_secret_settings, save_gui_settings, save_secret_settings
-from app.signature_db import SignatureDatabase
-from app.task_state import TaskState
-from app.ui_texts import t
 from app.lm_studio import (
     canonical_model_id,
     full_api_self_test,
@@ -51,8 +44,17 @@ from app.lm_studio import (
     resolve_ui_model,
     validate_model_for_sort,
 )
+from app.log_config import get_logger
+from app.model_profiles import ModelProfile, merge_profiles, profiles_to_settings
+from app.settings_store import load_gui_settings, load_secret_settings, save_gui_settings, save_secret_settings
+from app.signature_db import SignatureDatabase
+from app.tag_config import TagMode, resolve_tag_config
+from app.task_state import TaskState
+from app.ui_texts import t
 from app.video_frames import resolve_ffmpeg_executable
 from app.worker import SortWorker
+
+_logger = get_logger(__name__)
 
 
 def _format_eta(seconds: float) -> str:
@@ -101,13 +103,17 @@ from app.tag_mode_ui import (
     CLIP_QUALITY_VALUES,
     FLEXIBLE_TAG_MODES,
     PRESET_TAG_MODES,
-    TAG_MODE_LABELS as _TAG_MODE_LABELS,
-    TAG_MODE_VALUES as _TAG_MODE_VALUES,
     build_tag_mode_hint,
     hybrid_start_blockers,
     label_for_mode,
     mode_from_label,
     refs_button_enabled,
+)
+from app.tag_mode_ui import (
+    TAG_MODE_LABELS as _TAG_MODE_LABELS,
+)
+from app.tag_mode_ui import (
+    TAG_MODE_VALUES as _TAG_MODE_VALUES,
 )
 
 _TAG_MODE_LABELS = _TAG_MODE_LABELS
@@ -193,6 +199,9 @@ class App(ctk.CTk):
         if active_profile not in self._model_profiles:
             active_profile = "classifier"
         self._active_model_profile_var = ctk.StringVar(value=active_profile)
+        _active_prof = self._model_profiles.get(active_profile) or self._model_profiles["classifier"]
+        self._profile_workers_var = ctk.StringVar(value=str(_active_prof.workers))
+        self._profile_api_workers_var = ctk.StringVar(value=str(_active_prof.api_workers))
         mm = str(saved.get("media_mode", "") or MediaScanMode.PHOTOS_ONLY.value)
         if mm not in {m.value for m in MediaScanMode}:
             mm = MediaScanMode.PHOTOS_ONLY.value
@@ -287,6 +296,18 @@ class App(ctk.CTk):
     def _active_profile(self) -> ModelProfile:
         name = self._active_model_profile_var.get().strip() or "classifier"
         return self._model_profiles.get(name) or self._model_profiles["classifier"]
+
+    def _profile_workers_parsed(self) -> int:
+        try:
+            return max(1, min(16, int(self._profile_workers_var.get().strip())))
+        except ValueError:
+            return self._active_profile().workers
+
+    def _profile_api_workers_parsed(self) -> int:
+        try:
+            return max(1, min(16, int(self._profile_api_workers_var.get().strip())))
+        except ValueError:
+            return self._active_profile().api_workers
 
     def _api_key_resolved(self) -> str:
         return self._api_key_var.get().strip() or DEFAULT_API_KEY
@@ -555,6 +576,34 @@ class App(ctk.CTk):
             command=self._open_profile_manager,
         )
         self._btn_profile_save.pack(side="left")
+
+        row_workers = ctk.CTkFrame(lm, fg_color="transparent")
+        row_workers.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(row_workers, text=t("lm.workers"), width=120, anchor="w").pack(side="left")
+        _worker_values = [str(i) for i in range(1, 17)]
+        ctk.CTkComboBox(
+            row_workers,
+            values=_worker_values,
+            variable=self._profile_workers_var,
+            width=72,
+            state="readonly",
+        ).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(row_workers, text=t("lm.api_workers"), width=120, anchor="w").pack(side="left")
+        ctk.CTkComboBox(
+            row_workers,
+            values=_worker_values,
+            variable=self._profile_api_workers_var,
+            width=72,
+            state="readonly",
+        ).pack(side="left")
+        ctk.CTkLabel(
+            lm,
+            text=t("lm.workers.hint"),
+            anchor="w",
+            wraplength=820,
+            text_color=("gray35", "gray65"),
+            font=ctk.CTkFont(size=11),
+        ).pack(fill="x", padx=8, pady=(0, 4))
 
         row_vis = ctk.CTkFrame(lm, fg_color="transparent")
         row_vis.pack(fill="x", padx=8, pady=(0, 8))
@@ -1023,6 +1072,8 @@ class App(ctk.CTk):
         "min_margin",
         "softmax_temperature",
         "exemplar_boost",
+        "min_exemplar_similarity",
+        "exemplar_max_delta",
         "text_prompt_fusion",
         "text_prompt_max_pool",
         "crop_score_max_pool",
@@ -1201,6 +1252,8 @@ class App(ctk.CTk):
                 self._saved_model_selected = p.model
         if p.prompt_extra:
             self._prompt_extra_var.set(p.prompt_extra)
+        self._profile_workers_var.set(str(p.workers))
+        self._profile_api_workers_var.set(str(p.api_workers))
         self._append_log(t("lm.profile.applied", name=p.name, model=p.model or DEFAULT_MODEL))
 
     def _save_current_model_profile(self) -> None:
@@ -1214,8 +1267,8 @@ class App(ctk.CTk):
             temperature=current.temperature,
             max_tokens=current.max_tokens,
             timeout_sec=current.timeout_sec,
-            workers=3,
-            api_workers=1,
+            workers=self._profile_workers_parsed(),
+            api_workers=self._profile_api_workers_parsed(),
             prompt_extra=self._prompt_extra_var.get().strip(),
         )
         self._profile_combo.configure(values=sorted(self._model_profiles.keys()))
@@ -1249,7 +1302,11 @@ class App(ctk.CTk):
                     tb.insert("end", f"[{name}]{marker}\n")
                     tb.insert("end", f"  Модель:      {p.model or DEFAULT_MODEL}\n")
                     tb.insert("end", f"  API base:    {p.api_base or DEFAULT_API_BASE}\n")
-                    tb.insert("end", f"  Temperature: {p.temperature}  Max tokens: {p.max_tokens}  Timeout: {p.timeout_sec}s\n")
+                    tb.insert(
+                        "end",
+                        f"  Temperature: {p.temperature}  Max tokens: {p.max_tokens}  "
+                        f"Timeout: {p.timeout_sec}s  Workers: {p.workers}/{p.api_workers}\n",
+                    )
                     if p.prompt_extra:
                         short = p.prompt_extra[:80] + ("..." if len(p.prompt_extra) > 80 else "")
                         tb.insert("end", f"  Промпт:      {short}\n")
@@ -1318,8 +1375,8 @@ class App(ctk.CTk):
             self.after(0, lambda: self._set_probe_busy(True))
             try:
                 models = list_models(base, api_key=self._api_key_resolved())
-            except Exception as e:
-                self.after(0, lambda: self._append_log(f"Список моделей: ошибка {e!s}"))
+            except Exception as exc:
+                self.after(0, lambda err=exc: self._append_log(f"Список моделей: ошибка {err!s}"))
                 self.after(0, lambda: self._set_probe_busy(False))
                 return
 
@@ -1482,7 +1539,6 @@ class App(ctk.CTk):
         tag_mode_str = self._tag_mode_var.get()
         tag_mode, search_profile = _parse_tag_mode_str(tag_mode_str)
 
-        from app.constants import SearchProfile
         tag_cfg = resolve_tag_config(tag_mode, profile=search_profile, tag_store=_tag_store)
 
         if tag_mode in (TagMode.CUSTOM, TagMode.HYBRID) and not tag_cfg.categories:
@@ -1561,9 +1617,12 @@ class App(ctk.CTk):
             self._append_log(t("sort.warn_large_library_free"))
         self._save_gui_settings()
 
-        workers = 3
-        api_workers = 1
         profile = self._active_profile()
+        workers = self._profile_workers_parsed()
+        api_workers = self._profile_api_workers_parsed()
+        self._append_log(
+            f"Параллелизм: файловых потоков {workers}, одновременных запросов к LM {api_workers}."
+        )
         aliases = load_category_aliases()
 
         self._worker = SortWorker(
@@ -1765,8 +1824,8 @@ class App(ctk.CTk):
         self._save_gui_settings()
         try:
             self._db.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("database close on exit: %s", exc)
         self.destroy()
 
 

@@ -12,7 +12,6 @@ import customtkinter as ctk
 from app.context_tags import (
     Tag,
     TagSet,
-    TagStore,
     load_tag_store,
     save_tag_store,
 )

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from app.fast_classify.scoring import confidence_from_probs, needs_review
 
 

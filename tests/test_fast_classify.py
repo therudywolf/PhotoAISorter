@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from app.fast_classify.heuristics import heuristic_tag
 from app.fast_classify.priority import pick_tag
+from PIL import Image
 
 
 def test_pick_tag_prefers_my_dog_over_dog() -> None:

@@ -5,8 +5,7 @@
 
 from pathlib import Path
 
-from app.video_frames import diagnose_media_decode
-from app.video_frames import video_sample_times_sec
+from app.video_frames import diagnose_media_decode, video_sample_times_sec
 
 
 def test_three_points_full_duration() -> None:

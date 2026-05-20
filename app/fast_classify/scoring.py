@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from app.constants import UNCATEGORIZED
-
 
 def raw_similarity_margin(sims_row: np.ndarray) -> tuple[float, float]:
     """Top cosine similarity and gap to second place (before softmax)."""

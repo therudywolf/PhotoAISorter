@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 from app.fast_classify.config import FastClassifySettings
 from app.fast_classify.exemplars import refs_fingerprint

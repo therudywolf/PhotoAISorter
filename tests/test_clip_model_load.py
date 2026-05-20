@@ -8,8 +8,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from app.fast_classify.config import FastClassifySettings
 from app.fast_classify.device_info import resolve_clip_device
 from app.fast_classify.model import ClipEmbedder
@@ -17,7 +15,6 @@ from app.fast_classify.model import ClipEmbedder
 
 def test_create_model_uses_weights_only_false(monkeypatch: object, tmp_path: Path) -> None:
     import torch
-
     from app.fast_classify import model as model_mod
 
     captured: dict = {}

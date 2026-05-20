@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-
 from app.fast_classify.pipeline import _fuse_prompt_vectors
 
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 import itertools
 import json
 import random
-import re
 import threading
 import time
 from collections.abc import Callable
@@ -21,15 +20,14 @@ from app.constants import (
     API_MAX_RETRIES,
     API_PROBE_TIMEOUT_SEC,
     API_RETRY_BACKOFF_SEC,
-    CHAT_COMPLETIONS_PATH,
     CHAT_COMPLETION_MAX_TOKENS,
+    CHAT_COMPLETIONS_PATH,
     DEFAULT_API_BASE,
     DEFAULT_API_KEY,
     DEFAULT_MODEL,
     GENERAL_CATEGORY_WHITELIST,
     GIF_EXTENSION,
     MODELS_PATH,
-    PRIORITY_RULES_BLOCK,
     REQUEST_CONNECT_TIMEOUT_SEC,
     REQUEST_READ_TIMEOUT_SEC,
     UNCATEGORIZED,
@@ -38,7 +36,7 @@ from app.constants import (
     VISION_PROBE_MAX_TOKENS,
     VISION_TEST_TIMEOUT_SEC,
 )
-from app.tag_config import TagMode, ResolvedTagConfig
+from app.tag_config import ResolvedTagConfig, TagMode
 from app.text_utils import strip_thinking_sections
 
 LM_STUDIO_MODELS_PATH = "/api/v1/models"

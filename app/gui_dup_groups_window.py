@@ -39,7 +39,7 @@ _VIEWER_KEY_SEQUENCES = (
 
 
 class DuplicateGroupsViewer(ctk.CTkToplevel):
-    def __init__(self, master: Any, pane: "DuplicatesPane") -> None:
+    def __init__(self, master: Any, pane: DuplicatesPane) -> None:
         super().__init__(master)
         self._pane = pane
         self._fp = 0
