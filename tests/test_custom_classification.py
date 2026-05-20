@@ -11,7 +11,7 @@ from queue import Queue
 from app.category_aliases import load_category_aliases, resolve_storage_category
 from app.classification_result import parse_classification_result
 from app.constants import MediaScanMode
-from app.context_tags import Tag, TagSet, TagStore, load_tag_store
+from app.context_tags import Tag, TagSet, TagStore
 from app.db import Database
 from app.lm_studio import CUSTOM_CLASSIFICATION_GUIDANCE, build_system_prompt
 from app.tag_config import TagMode, resolve_tag_config
@@ -86,16 +86,32 @@ def test_resolve_tag_config_custom_skips_duplicate_user_context() -> None:
     assert cfg.prompts["iam"] == "owner"
 
 
-def test_forest_preset_loaded_when_present() -> None:
-    store = load_tag_store()
-    if store.active_set != "forest":
-        return
+def test_forest_style_preset_resolves_with_whitelist() -> None:
+    """A multi-tag custom preset resolves to a strict whitelist plus uncategorized.
+
+    Hermetic: builds its own store instead of reading the user's local
+    context_tags.json, which is gitignored personal data.
+    """
+    store = TagStore(
+        active_set="forest",
+        sets=[
+            TagSet(
+                name="forest",
+                tags=[
+                    Tag("iam", "owner"),
+                    Tag("my_dog", "pet dog"),
+                    Tag("forest", "trees"),
+                    Tag("car", "vehicles"),
+                ],
+            )
+        ],
+    )
     cfg = resolve_tag_config(TagMode.CUSTOM, tag_store=store)
-    assert len(cfg.categories) >= 50
     assert "iam" in cfg.categories
     assert "forest" in cfg.categories
+    assert "uncategorized" in cfg.categories
     assert cfg.whitelist is not None
-    assert "iam_face" in cfg.whitelist
+    assert cfg.whitelist == frozenset(cfg.categories)
 
 
 def test_virtual_tag_aliases_map_to_parent_folder() -> None:

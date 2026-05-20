@@ -13,6 +13,7 @@ from typing import Any
 from app.db import default_db_path
 
 # Virtual CLIP tags (separate refs folders) map to parent on-disk sort folders.
+# Also covers legacy *_alt folders so they merge back into their canonical tag.
 BUILTIN_STORAGE_ALIASES: dict[str, str] = {
     "iam_face": "iam",
     "iam_body": "iam",
@@ -22,6 +23,10 @@ BUILTIN_STORAGE_ALIASES: dict[str, str] = {
     "my_dog_alt": "my_dog",
     "my_cat_closeup": "my_cat",
     "my_cat_fullbody": "my_cat",
+    "personal_user_sfw_alt": "personal_user_sfw",
+    "personal_user_nsfw_alt": "personal_user_nsfw",
+    "puppy_play_alt": "puppy_play",
+    "uncategorized_alt": "uncategorized",
 }
 
 _ALIAS_KEY_RE = re.compile(r"[^a-z0-9_/\-\s]+")
