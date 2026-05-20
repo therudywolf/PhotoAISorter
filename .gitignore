@@ -22,9 +22,11 @@ gui_settings.json
 **/gui_settings.json
 
 # Local persistent data (refs, CLIP weights — next to project / install dir)
+# data/refs/ keeps only its README in git; personal reference photos stay local.
 data/*
 !data/README.txt
 !data/refs/
+data/refs/*
 !data/refs/README.txt
 
 # Runtime cache (SQLite, hashes, WAL — keep on fast disk)
