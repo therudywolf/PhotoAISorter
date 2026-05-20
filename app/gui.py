@@ -926,7 +926,11 @@ class App(ctk.CTk):
         win = ctk.CTkToplevel(self)
         mode = self._tag_mode_var.get()
         if mode in ("custom", "hybrid"):
-            win.title("Свой список категорий" if mode == "custom" else "Быстрая CLIP — список категорий")
+            win.title(
+                t("folders.tags.dialog_title_custom")
+                if mode == "custom"
+                else t("folders.tags.dialog_title_hybrid")
+            )
             _store = load_tag_store()
             _aset = get_active_set(_store)
             categories = build_custom_categories(_aset) if _aset else ()
@@ -1207,14 +1211,8 @@ class App(ctk.CTk):
         if total <= 0 or (status == "completed" and done >= total):
             return False, False
         res = messagebox.askyesnocancel(
-            "Найден сохранённый прогресс",
-            (
-                "Для этих параметров сортировки уже есть сессия:\n\n"
-                f"{self._sort_session_summary(row)}\n\n"
-                "Да — продолжить\n"
-                "Нет — начать новую сессию (общий SHA-кеш всё равно сохранится)\n"
-                "Отмена — не запускать"
-            ),
+            t("sort.resume.title"),
+            t("sort.resume.text", summary=self._sort_session_summary(row)),
         )
         if res is None:
             return True, False
@@ -1278,7 +1276,7 @@ class App(ctk.CTk):
 
     def _open_profile_manager(self) -> None:
         win = ctk.CTkToplevel(self)
-        win.title("Профили моделей")
+        win.title(t("lm.profiles.window_title"))
         win.geometry("680x460")
         win.transient(self)
         win.grab_set()
@@ -1332,12 +1330,12 @@ class App(ctk.CTk):
         ctk.CTkButton(win, text=t("buttons.close"), width=120, command=win.destroy).pack(pady=(0, 12))
 
     def _pick_in(self) -> None:
-        d = filedialog.askdirectory(title="Папка с файлами для сортировки")
+        d = filedialog.askdirectory(title=t("folders.pick_in.title"))
         if d:
             self._in_var.set(d)
 
     def _pick_out(self) -> None:
-        d = filedialog.askdirectory(title="Папка для результата")
+        d = filedialog.askdirectory(title=t("folders.pick_out.title"))
         if d:
             self._out_var.set(d)
 

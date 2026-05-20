@@ -18,12 +18,13 @@ from app.context_tags import build_custom_categories, get_active_set, load_tag_s
 from app.fast_classify.exemplar_files import add_exemplar_files, remove_exemplar_file
 from app.fast_classify.exemplars import ensure_refs_layout, list_exemplar_paths, refs_dir
 from app.fast_classify.registry import clear_classifier_cache
+from app.ui_texts import t
 
 
 class ExemplarsDialog(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTkBaseClass, *, on_log: None | callable = None) -> None:
         super().__init__(parent)
-        self.title("Эталоны для быстрой CLIP")
+        self.title(t("exemplars.window_title"))
         self.geometry("640x520")
         self.resizable(True, True)
         self.transient(parent)
@@ -92,7 +93,7 @@ class ExemplarsDialog(ctk.CTkToplevel):
         self._list.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self._file_vars: list[tuple[str, ctk.BooleanVar]] = []
 
-        ctk.CTkButton(self, text="Закрыть", width=120, command=self.destroy).pack(pady=(0, 12))
+        ctk.CTkButton(self, text=t("buttons.close"), width=120, command=self.destroy).pack(pady=(0, 12))
 
     def _reload_tags(self) -> None:
         store = load_tag_store()

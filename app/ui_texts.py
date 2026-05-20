@@ -109,6 +109,20 @@ TEXTS: dict[str, str] = {
     "ctx.user_context": "Контекст для ИИ (USER_CONTEXT):",
     "ctx.tags": "Теги...",
     "session.resume": "Продолжить сессию",
+    "lm.profiles.window_title": "Профили моделей",
+    "folders.pick_in.title": "Папка с файлами для сортировки",
+    "folders.pick_out.title": "Папка для результата",
+    "folders.tags.dialog_title_custom": "Свой список категорий",
+    "folders.tags.dialog_title_hybrid": "Быстрая CLIP — список категорий",
+    "exemplars.window_title": "Эталоны для быстрой CLIP",
+    "sort.resume.title": "Найден сохранённый прогресс",
+    "sort.resume.text": (
+        "Для этих параметров сортировки уже есть сессия:\n\n"
+        "{summary}\n\n"
+        "Да — продолжить\n"
+        "Нет — начать новую сессию (общий SHA-кеш всё равно сохранится)\n"
+        "Отмена — не запускать"
+    ),
     "cache.choose": "Выберите, что очистить:",
     "cache.sort": "Кеш сортировки",
     "cache.dup": "Кеш дубликатов",
