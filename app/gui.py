@@ -277,7 +277,7 @@ class App(ctk.CTk):
         self._refresh_context_display()
         self._in_var.trace_add("write", lambda *_: self._update_start_state())
         self._out_var.trace_add("write", lambda *_: self._update_start_state())
-        self._media_mode_var.trace_add("write", lambda *_: self.after(0, self._on_media_mode_value_changed))
+        self._media_mode_var.trace_add("write", lambda *_: self._post(self._on_media_mode_value_changed))
         self._update_start_state()
         self._update_ffmpeg_hint()
         self._refresh_resume_sort_button()
@@ -334,6 +334,17 @@ class App(ctk.CTk):
 
     def _api_key_resolved(self) -> str:
         return self._api_key_var.get().strip() or DEFAULT_API_KEY
+
+    def _post(self, fn) -> None:
+        """Schedule a callback on the UI thread; safe to call from worker threads.
+
+        After the window is destroyed, Tk's after() raises RuntimeError/TclError
+        from background threads — swallow it so shutdown stays quiet.
+        """
+        try:
+            self.after(0, fn)
+        except Exception:
+            pass
 
     def _build(self) -> None:
         pad = {"padx": 12, "pady": 6}
@@ -529,7 +540,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
         )
         self._tag_mode_hint.pack(fill="x", padx=8, pady=(0, 8))
-        self._tag_mode_var.trace_add("write", lambda *_: self.after(0, self._on_tag_mode_value_changed))
+        self._tag_mode_var.trace_add("write", lambda *_: self._post(self._on_tag_mode_value_changed))
         self._sync_tag_mode_segments()
         self._update_tag_mode_hint()
         self._update_refs_button()
@@ -926,7 +937,7 @@ class App(ctk.CTk):
         def _work() -> None:
             from app.fast_classify.clip_setup import ensure_clip_ready
 
-            ok, msg = ensure_clip_ready(settings, on_log=lambda m: self.after(0, lambda: self._append_log(m)))
+            ok, msg = ensure_clip_ready(settings, on_log=lambda m: self._post(lambda: self._append_log(m)))
 
             def _done() -> None:
                 self._clip_prepare_busy = False
@@ -938,7 +949,7 @@ class App(ctk.CTk):
                     self._clip_status_label.configure(text=msg)
                 self._update_tag_mode_hint()
 
-            self.after(0, _done)
+            self._post(_done)
 
         import threading
 
@@ -1391,12 +1402,12 @@ class App(ctk.CTk):
         base = self._api_var.get().strip() or DEFAULT_API_BASE
 
         def work() -> None:
-            self.after(0, lambda: self._set_probe_busy(True))
+            self._post(lambda: self._set_probe_busy(True))
             try:
                 models = list_models(base, api_key=self._api_key_resolved())
             except Exception as exc:
-                self.after(0, lambda err=exc: self._append_log(f"Список моделей: ошибка {err!s}"))
-                self.after(0, lambda: self._set_probe_busy(False))
+                self._post(lambda err=exc: self._append_log(f"Список моделей: ошибка {err!s}"))
+                self._post(lambda: self._set_probe_busy(False))
                 return
 
             def apply() -> None:
@@ -1435,7 +1446,7 @@ class App(ctk.CTk):
                 self._append_log(f"Загружено моделей: {len(models)}{loaded_note}")
                 self._set_probe_busy(False)
 
-            self.after(0, apply)
+            self._post(apply)
 
         threading.Thread(target=work, daemon=True).start()
         self._append_log("Запрос списка моделей...")
@@ -1445,7 +1456,7 @@ class App(ctk.CTk):
         model = self._model_resolved()
 
         def work() -> None:
-            self.after(0, lambda: self._set_probe_busy(True))
+            self._post(lambda: self._set_probe_busy(True))
             ok, report = full_api_self_test(base, model, api_key=self._api_key_resolved())
 
             def apply() -> None:
@@ -1464,7 +1475,7 @@ class App(ctk.CTk):
                     )
                 self._set_probe_busy(False)
 
-            self.after(0, apply)
+            self._post(apply)
 
         threading.Thread(target=work, daemon=True).start()
         self._append_log("Запуск самотеста API...")
@@ -1516,14 +1527,14 @@ class App(ctk.CTk):
         base = self._api_var.get().strip() or DEFAULT_API_BASE
 
         def work() -> None:
-            self.after(0, lambda: self._set_probe_busy(True))
+            self._post(lambda: self._set_probe_busy(True))
             try:
                 rows = loaded_model_instances(base, api_key=self._api_key_resolved())
                 text = self._format_loaded_models(rows)
             except Exception as e:
                 text = f"LM Studio loaded models: ошибка {e!s}"
-            self.after(0, lambda: self._append_log(text))
-            self.after(0, lambda: self._set_probe_busy(False))
+            self._post(lambda: self._append_log(text))
+            self._post(lambda: self._set_probe_busy(False))
 
         threading.Thread(target=work, daemon=True).start()
         self._append_log("Проверяю загруженные модели LM Studio...")
