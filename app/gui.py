@@ -76,6 +76,28 @@ def _section_label(parent: ctk.CTkFrame, text: str) -> None:
     )
 
 
+def _setup_dialog(win: ctk.CTkToplevel, parent: ctk.CTk, *, modal: bool = False) -> None:
+    """Make a Toplevel raise to the front, take focus, and optionally grab input.
+
+    grab_set is deferred and guarded: on Windows it raises TclError when the
+    window is not yet viewable, which would otherwise abort dialog creation.
+    """
+    win.transient(parent)
+    win.lift()
+
+    def _activate() -> None:
+        try:
+            if not win.winfo_exists():
+                return
+            win.focus_set()
+            if modal:
+                win.grab_set()
+        except Exception:
+            pass
+
+    win.after(120, _activate)
+
+
 def _format_tag_list_for_display(categories: tuple[str, ...]) -> str:
     return "\n".join(categories)
 
@@ -734,7 +756,7 @@ class App(ctk.CTk):
         win = ctk.CTkToplevel(self)
         win.title("About / License")
         win.geometry("620x430")
-        win.transient(self)
+        _setup_dialog(win, self)
         text = (
             "Photo AI Sorter\n\n"
             "Copyright (C) 2026 Photo AI Sorter contributors.\n\n"
@@ -943,7 +965,7 @@ class App(ctk.CTk):
             from app.constants import categories_for_profile
             categories = categories_for_profile(_profile)
         win.geometry("480x520")
-        win.transient(self)
+        _setup_dialog(win, self)
         tb = ctk.CTkTextbox(win, font=ctk.CTkFont(size=12))
         tb.pack(fill="both", expand=True, padx=12, pady=(12, 8))
         tb.insert("1.0", _format_tag_list_for_display(categories))
@@ -1000,8 +1022,7 @@ class App(ctk.CTk):
         win = ctk.CTkToplevel(self)
         win.title(t("cache.ask.title"))
         win.geometry("420x220")
-        win.transient(self)
-        win.grab_set()
+        _setup_dialog(win, self, modal=True)
 
         ctk.CTkLabel(
             win, text=t("cache.choose"), font=ctk.CTkFont(size=14, weight="bold"),
@@ -1278,8 +1299,7 @@ class App(ctk.CTk):
         win = ctk.CTkToplevel(self)
         win.title(t("lm.profiles.window_title"))
         win.geometry("680x460")
-        win.transient(self)
-        win.grab_set()
+        _setup_dialog(win, self, modal=True)
 
         ctk.CTkLabel(
             win, text=t("lm.profiles.saved_title"), font=ctk.CTkFont(size=14, weight="bold"),
