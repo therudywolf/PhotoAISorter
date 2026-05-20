@@ -34,6 +34,9 @@ jobs:
       - name: Compile
         run: python -m compileall -q app tests main.py
 
+      - name: Ruff
+        run: python -m ruff check app tests main.py scripts
+
       - name: Test
         run: python -m pytest -q
 

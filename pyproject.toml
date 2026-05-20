@@ -33,3 +33,15 @@ Source = "https://github.com/therudywolf/PhotoAISorter"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["app", "tests", "main.py", "scripts"]
+
+[tool.ruff.lint]
+select = ["E9", "F", "I"]
+ignore = ["E501", "E402"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B017"]
