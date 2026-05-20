@@ -7,27 +7,33 @@ from __future__ import annotations
 
 
 def clip_text_prompts_for_tag(tag: str, description: str) -> list[str]:
-    """Return several prompts per tag; embeddings are averaged and re-normalized."""
-    label = tag.replace("_", " ")
-    desc = (description or label).strip()
+    """Return several English prompts per tag; embeddings are averaged and re-normalized.
+
+    OpenAI CLIP is English-trained, so every template stays English and
+    natural-language. Raw tag tokens (e.g. ``furry_nsfw_canidae``) are not real
+    words, so prompts use the human-readable label and the user description
+    instead of injecting the tag id or "folder name" framing.
+    """
+    label = tag.replace("_", " ").strip() or tag
+    desc = " ".join((description or "").split())
     if len(desc) > 220:
-        desc = desc[:217] + "..."
-    base = [
-        f"a photo of {label}. {desc}",
-        f"a picture in category {tag}. {desc}",
-        f"{desc} Category: {tag}.",
-        f"фотография категории «{label}». {desc}",
-        f"high quality photograph showing {desc}. Folder name: {tag}.",
-        f"realistic image, subject: {desc}. Tag {tag}.",
-        f"детальная фотография: {desc}. Класс {tag}.",
-        f"the main subject matches: {desc}. Label {tag}.",
-        f"изображение для сортировки в папку {tag}: {desc}",
-    ]
-    if desc and desc.lower() != label.lower():
-        base.extend(
-            [
-                f"only choose {tag} if the image clearly shows: {desc}",
-                f"типичное содержимое папки {tag}: {desc}",
-            ]
-        )
-    return base
+        desc = desc[:217].rstrip() + "..."
+
+    prompts: list[str] = [f"a photo of {label}."]
+    if desc:
+        prompts.append(f"a photo of {label}, {desc}")
+        prompts.append(f"an image showing {desc}")
+        prompts.append(f"a picture of {desc}")
+        prompts.append(desc)
+    else:
+        prompts.append(f"a clear, well-lit photo of {label}.")
+        prompts.append(f"a picture of {label}.")
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in prompts:
+        key = p.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
