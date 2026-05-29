@@ -317,14 +317,19 @@ class DuplicateGroupsViewer(ctk.CTkToplevel):
                 loading = ui_t("dup.thumb.ffmpeg_try") if path.suffix.lower() in VIDEO_EXTENSIONS else ui_t("dup.thumb.loading")
                 img_label.configure(text=loading)
 
-                def task(p: Path = path, k: str = key, lbl: ctk.CTkLabel = img_label) -> None:
+                def task(
+                    p: Path = path,
+                    k: str = key,
+                    lbl: ctk.CTkLabel = img_label,
+                    g: int = item_gen,
+                ) -> None:
                     def vlog(_m: str) -> None:
                         pass
 
                     created = thumb_ctk(p, size=VIEWER_THUMB_SIZE, on_video_log=vlog)
 
                     def apply() -> None:
-                        if item_gen != self._thumb_gen or not lbl.winfo_exists():
+                        if g != self._thumb_gen or not lbl.winfo_exists():
                             return
                         if created is not None:
                             self._touch_cache(k, created)

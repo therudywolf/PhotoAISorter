@@ -796,7 +796,7 @@ class SortWorker:
                                 else:
                                     uris = [pil_image_to_jpeg_data_uri(im) for im in frames]
                                     category = _timed_api_call(
-                                        lambda: classify_frames_cfg(
+                                        lambda uris=uris: classify_frames_cfg(
                                             uris,
                                             self.tag_config,
                                             api_base=_get_api_base(),
@@ -812,7 +812,7 @@ class SortWorker:
                         else:
                             data_uri = image_to_jpeg_base64_data_uri(path)
                             raw = _timed_api_call(
-                                lambda: chat_completion_cfg(
+                                lambda data_uri=data_uri: chat_completion_cfg(
                                     data_uri,
                                     self.tag_config,
                                     api_base=_get_api_base(),

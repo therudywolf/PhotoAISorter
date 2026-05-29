@@ -443,7 +443,9 @@ def run_hybrid_sort(
                 metrics["fast_classify"] = int(metrics["fast_classify"]) + len(chunk)
 
             vlm_items: list[tuple[dict[str, Any], ClassificationResult]] = []
-            for item, result in zip(chunk, results):
+            # classify_batch returns exactly one result per path; strict=False keeps
+            # a long run alive instead of raising on any unforeseen length drift.
+            for item, result in zip(chunk, results, strict=False):
                 if vlm_enabled and _clip_needs_vlm_fallback(
                     result, confidence_threshold=settings.confidence_threshold
                 ):
