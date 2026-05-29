@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "photo-ai-sorter"
-version = "0.1.0"
+version = "0.4.0a1"
 description = "Local desktop tool for sorting photo and video libraries with a vision model."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,7 +40,9 @@ line-length = 120
 src = ["app", "tests", "main.py", "scripts"]
 
 [tool.ruff.lint]
-select = ["E9", "F", "I"]
+# E9/F: real errors & undefined names; I: import order; B: bugbear (catches
+# loop-variable closures, mutable defaults, and similar latent bugs).
+select = ["E9", "F", "I", "B"]
 ignore = ["E501", "E402"]
 
 [tool.ruff.lint.per-file-ignores]
