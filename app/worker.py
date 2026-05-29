@@ -108,17 +108,40 @@ def has_disk_space_for_copy(dest_dir: Path, source_file: Path, margin: int = COP
     return free >= need + margin
 
 
-def unique_dest_path(dest_dir: Path, filename: str) -> Path:
+def _dest_matches_digest(candidate: Path, source_digest: str | None) -> bool:
+    """True when an existing destination file is byte-identical to the source.
+
+    Used to make copies idempotent: if a previous run copied this file but a
+    hard crash lost the DB record, the file is already on disk and must be
+    reused instead of duplicated as name_1.ext on resume. Same-content files
+    in a normal run are already deduplicated upstream by SHA-256, so this only
+    triggers on genuine name collisions (cheap) and crash recovery.
+    """
+    if not source_digest:
+        return False
+    try:
+        from app.images import file_sha256
+
+        return candidate.is_file() and file_sha256(candidate) == source_digest
+    except OSError:
+        return False
+
+
+def unique_dest_path(dest_dir: Path, filename: str, *, source_digest: str | None = None) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     base = Path(filename).name
     candidate = dest_dir / base
     if not candidate.exists():
+        return candidate
+    if _dest_matches_digest(candidate, source_digest):
         return candidate
     stem = Path(base).stem
     ext = Path(base).suffix
     for i in range(1, 10_000):
         c = dest_dir / f"{stem}_{i}{ext}"
         if not c.exists():
+            return c
+        if _dest_matches_digest(c, source_digest):
             return c
     raise OSError("could not find free destination name")
 
@@ -903,7 +926,7 @@ class SortWorker:
                         )
                     else:
                         with self._io_lock:
-                            dest_file = unique_dest_path(tag_dir, path.name)
+                            dest_file = unique_dest_path(tag_dir, path.name, source_digest=digest)
                             shutil.copy2(path, dest_file)
                         self.db.mark_processed(digest, category, PIPELINE_VERSION)
                         self.db.mark_sort_session_item(

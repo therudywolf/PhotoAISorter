@@ -361,7 +361,7 @@ def run_hybrid_sort(
 
         try:
             with worker._io_lock:
-                dest_file = unique_dest_path(tag_dir, path.name)
+                dest_file = unique_dest_path(tag_dir, path.name, source_digest=item["digest"])
                 shutil.copy2(path, dest_file)
             worker.db.mark_processed(item["digest"], category, PIPELINE_VERSION)
             worker.db.mark_sort_session_item(
