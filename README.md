@@ -255,10 +255,20 @@ Tune thresholds in `gui_settings.json` → `fast_classify` (`confidence_threshol
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m compileall -q app tests main.py
+python -m ruff check app tests main.py scripts
 python -m pytest -q
 ```
 
-The repository normalizes text files through `.gitattributes` and `.editorconfig` to keep diffs readable.
+If you have reference photos under `data/refs/<tag>/`, measure classification
+accuracy with a leave-one-out evaluation:
+
+```bash
+.venv/Scripts/python scripts/eval_accuracy.py   # Windows
+.venv/bin/python scripts/eval_accuracy.py        # Linux/macOS
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for notable changes. The repository normalizes
+text files through `.gitattributes` and `.editorconfig` to keep diffs readable.
 
 ## Contributing
 
