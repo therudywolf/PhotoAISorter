@@ -91,6 +91,9 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Launcher first-run marker (created by "Photo AI Sorter.cmd")
+.desktop_shortcut_done
+
 # Local app/runtime output (under sort destination or app_state)
 _review_runs/
 duplicate_runs/

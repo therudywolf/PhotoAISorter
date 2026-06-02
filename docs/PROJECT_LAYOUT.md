@@ -9,11 +9,9 @@ Canonical folders for a working copy of Photo AI Sorter.
 | `app/` | Application source code |
 | `tests/` | Pytest suite |
 | `main.py` | Entry point |
-| `run.bat` | Windows launcher (venv, deps, GUI, tests) |
+| `Photo AI Sorter.cmd` | Windows entry point: double-click → setup + GUI, makes a desktop shortcut on first run |
+| `run.bat` | Windows engine (venv, deps, GUI, tests); used by the launcher and for console runs |
 | `run.sh` | Linux/macOS launcher (same roles as `run.bat`) |
-| `START_Photo_AI_Sorter.sh` | Thin wrapper → `run.sh` |
-| `START_Photo_AI_Sorter.cmd` | Double-click GUI wrapper → `run.bat gui` |
-| `CREATE_DESKTOP_SHORTCUT.cmd` | Creates a desktop shortcut to the `.cmd` launcher |
 | `requirements.txt` | Runtime pip dependencies |
 | `requirements-dev.txt` | Dev deps (`-r requirements.txt` + pytest) |
 | `requirements-gpu.txt` | Optional CUDA PyTorch overlay |

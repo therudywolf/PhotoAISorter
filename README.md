@@ -53,7 +53,7 @@ Requirements: **Python 3.10+** on PATH. Internet on first run (pip + CLIP weight
 
 | OS | What to run |
 |----|-------------|
-| **Windows** | Double-click [`START_Photo_AI_Sorter.cmd`](START_Photo_AI_Sorter.cmd) |
+| **Windows** | Double-click [`Photo AI Sorter.cmd`](Photo%20AI%20Sorter.cmd) |
 | **Linux / macOS** | `chmod +x run.sh && ./run.sh` |
 
 The launcher will:
@@ -61,7 +61,8 @@ The launcher will:
 1. Create `.venv` in the project folder  
 2. Install Python dependencies from `requirements.txt`  
 3. On NVIDIA GPU: install CUDA PyTorch (`requirements-gpu.txt`) when needed  
-4. Start the GUI  
+4. Create a **Photo AI Sorter** desktop shortcut on first run (Windows)  
+5. Start the GUI  
 
 **First launch** can take several minutes (pip). **First hybrid CLIP sort** may download ~900 MB (`ViT-L-14` weights) into `data/clip_weights/` — use the **«Скачать веса CLIP»** button in the GUI or start a sort (download runs automatically).
 
@@ -69,9 +70,10 @@ Optional:
 
 | File | Purpose |
 |------|---------|
-| [`run.bat`](run.bat) | Windows console launcher (`run.bat gui`, `run.bat test`) |
+| [`run.bat`](run.bat) | Windows engine / console launcher (`run.bat gui`, `run.bat test`) |
 | [`run.sh`](run.sh) | Same as above on Linux |
-| [`CREATE_DESKTOP_SHORTCUT.cmd`](CREATE_DESKTOP_SHORTCUT.cmd) | Windows desktop shortcut |
+
+The desktop shortcut is created automatically on the first `Photo AI Sorter.cmd` run.
 
 Run tests: `run.bat test` (Windows) or `./run.sh test` (Linux).
 
