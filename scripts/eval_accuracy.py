@@ -71,6 +71,8 @@ def main() -> int:
     real_list = exemplars_mod.list_exemplar_paths
     per_tag: dict[str, list[bool]] = defaultdict(list)
     confusions: list[tuple[str, str, Path]] = []
+    n_review = 0
+    n_auto_correct = 0
 
     for tag, imgs in labelled.items():
         for img in imgs:
@@ -88,6 +90,10 @@ def main() -> int:
 
             ok = res.category == tag
             per_tag[tag].append(ok)
+            if res.needs_review:
+                n_review += 1
+            elif ok:
+                n_auto_correct += 1
             mark = "OK  " if ok else "MISS"
             review = " [review]" if res.needs_review else ""
             print(f"  [{mark}] {tag:<14} {img.name:<32} -> {res.category}{review}")
@@ -103,6 +109,11 @@ def main() -> int:
         print(f"  {tag:<16} {c}/{len(results)}  ({100 * c / len(results):.0f}%)")
 
     print(f"\nOverall: {correct}/{total_imgs}  ({100 * correct / total_imgs:.1f}%)")
+    print(
+        f"Auto-confident (correct, no review): {n_auto_correct}/{total_imgs}  "
+        f"({100 * n_auto_correct / total_imgs:.1f}%)"
+    )
+    print(f"Sent to review: {n_review}/{total_imgs}  (lower is better when accuracy holds)")
     if confusions:
         print("\n== Misclassifications ==")
         for expected, got, img in confusions:

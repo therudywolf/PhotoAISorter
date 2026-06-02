@@ -87,6 +87,37 @@ def test_classifier_registry_reuses_instance(monkeypatch: object) -> None:
     clear_classifier_cache()
 
 
+def _clf_no_refs(monkeypatch: object) -> FastClassifier:
+    monkeypatch.setattr("app.fast_classify.pipeline.clip_available", lambda: True)
+    monkeypatch.setattr("app.fast_classify.pipeline.ClipEmbedder", _MockEmbedder)
+    monkeypatch.setattr("app.fast_classify.pipeline.ensure_refs_layout", lambda **_: None)
+    monkeypatch.setattr("app.fast_classify.pipeline.list_exemplar_paths", lambda *_a, **_k: [])
+    return FastClassifier(_cfg(), FastClassifySettings())
+
+
+def test_decisive_exemplar_match_not_forced_to_review(monkeypatch: object) -> None:
+    """A strong exemplar win with weak text (e.g. personal `iam`) should auto-pass."""
+    clf = _clf_no_refs(monkeypatch)
+    # tags order: my_dog, cat, uncategorized. my_dog: text < 0.24, big exemplar delta,
+    # wide cosine margin (0.20) and softmax lead -> decisive, must NOT need review.
+    sims = np.array([0.40, 0.20, 0.10], dtype=np.float32)
+    text = np.array([0.22, 0.20, 0.10], dtype=np.float32)
+    res = clf._result_from_sims_row(sims, text_sims_row=text, embedding_failed=False)
+    assert res.category == "my_dog"
+    assert res.needs_review is False
+
+
+def test_narrow_exemplar_match_still_reviewed(monkeypatch: object) -> None:
+    """A low-text exemplar boost that barely wins stays cautious (review)."""
+    clf = _clf_no_refs(monkeypatch)
+    # raw margin 0.05 (< 0.06) -> not decisive; low text + exemplar delta -> review.
+    sims = np.array([0.30, 0.25, 0.10], dtype=np.float32)
+    text = np.array([0.22, 0.25, 0.10], dtype=np.float32)
+    res = clf._result_from_sims_row(sims, text_sims_row=text, embedding_failed=False)
+    assert res.category == "my_dog"
+    assert res.needs_review is True
+
+
 def test_heuristic_short_circuits_clip(monkeypatch: object, tmp_path: Path) -> None:
     monkeypatch.setattr("app.fast_classify.pipeline.clip_available", lambda: True)
     embedder = MagicMock()

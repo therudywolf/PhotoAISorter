@@ -256,7 +256,12 @@ class FastClassifier:
             tag_idx = self._tags.index(tag)
             ex_delta = float(sims_row[tag_idx] - text_sims_row[tag_idx])
             text_score = float(text_sims_row[tag_idx])
-            if ex_delta >= 0.045 and text_score < 0.24:
+            # An exemplar boost with weak text is only suspicious when the win is
+            # also narrow. A decisive exemplar match — clear cosine margin AND a
+            # wide softmax lead — is the intended signal for personal tags whose
+            # name is not a CLIP text concept (iam, my_dog, …); don't force review.
+            decisive = raw_margin >= 0.06 and prob_margin >= self.settings.min_margin
+            if ex_delta >= 0.045 and text_score < 0.24 and not decisive:
                 review = True
         return ClassificationResult(
             category=tag,
