@@ -501,14 +501,21 @@ class App(ctk.CTk):
             command=self._on_clip_device_clicked,
         )
         self._clip_device_seg.set(CLIP_DEVICE_LABELS[_dev_key])
-        self._clip_device_seg.pack(side="left", padx=(4, 8))
+        # Expand like the quality row above so both segmented buttons share one right edge.
+        self._clip_device_seg.pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        # VLM fallback on its own row: the label is long and crowded the device buttons.
+        # The empty 72px spacer keeps the checkbox aligned under the segmented controls.
+        row_clip_vlm = ctk.CTkFrame(self._hybrid_clip_panel, fg_color="transparent")
+        row_clip_vlm.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(row_clip_vlm, text="", width=72).pack(side="left")
         self._hybrid_vlm_cb = ctk.CTkCheckBox(
-            row_clip_dev,
+            row_clip_vlm,
             text=t("folders.tag_mode.hybrid_vlm_fallback"),
             variable=self._hybrid_vlm_fallback_var,
             command=self._on_hybrid_option_changed,
         )
-        self._hybrid_vlm_cb.pack(side="left", padx=(0, 4))
+        self._hybrid_vlm_cb.pack(side="left", padx=(4, 4))
 
         row_clip_actions = ctk.CTkFrame(self._hybrid_clip_panel, fg_color="transparent")
         row_clip_actions.pack(fill="x", padx=8, pady=(0, 4))
@@ -842,9 +849,9 @@ class App(ctk.CTk):
         dev = "auto"
         if hasattr(self, "_clip_device_var"):
             dev = CLIP_DEVICE_VALUES.get(self._clip_device_var.get(), "auto")
-        quality = "max"
+        quality = "ultra"
         if hasattr(self, "_clip_quality_var"):
-            quality = CLIP_QUALITY_VALUES.get(self._clip_quality_var.get(), "max")
+            quality = CLIP_QUALITY_VALUES.get(self._clip_quality_var.get(), "ultra")
         self._tag_mode_hint.configure(
             text=build_tag_mode_hint(
                 self._tag_mode_var.get(),
