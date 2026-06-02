@@ -141,8 +141,11 @@ fi
 
 if command -v nvidia-smi &>/dev/null; then
     if ! "$PY" -c "import torch; import sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
-        echo "[2/3] NVIDIA GPU найден — ставлю PyTorch с CUDA (cu124) ..."
-        if ! "$PY" -m pip install -r requirements-gpu.txt --upgrade -q --disable-pip-version-check; then
+        echo "[2/3] NVIDIA GPU найден — ставлю PyTorch с CUDA (cu126) ..."
+        # --force-reinstall --no-deps: a CPU torch of the same version already
+        # satisfies torch>=..., so --upgrade is a no-op; force the CUDA wheel and
+        # keep numpy/pillow (absent from the pytorch index) intact.
+        if ! "$PY" -m pip install -r requirements-gpu.txt --force-reinstall --no-deps -q --disable-pip-version-check; then
             echo "[ПРЕДУПРЕЖДЕНИЕ] Не удалось установить torch+cuda. CLIP будет на CPU."
         else
             echo "      PyTorch CUDA установлен."
